@@ -33,13 +33,13 @@ Recommended screenshot files:
 
 | Screenshot | Area |
 | --- | --- |
-| ![Admin](docs/screenshots/screen1.png)` | Admin` |
+| ![Admin](docs/screenshots/screen1.png)` | Admin |
 | ![Eat](docs/screenshots/screen2.png)` | Menu` |
-| ![Guest](docs/screenshots/screen3.png)` | NewGuest` |
-| ![Order](docs/screenshots/screen4.png)` | Guestorder` |
-| ![Status](docs/screenshots/screen5.png)` | Meal status` |
-| ![Admin](docs/screenshots/screen6.png)` | Admin` |
-| ![ToDoList](docs/screenshots/screen7.png)` | ToDoList` |
+| ![Guest](docs/screenshots/screen3.png)` | NewGuest |
+| ![Order](docs/screenshots/screen4.png)` | Guestorder |
+| ![Status](docs/screenshots/screen5.png)` | Meal status |
+| ![Admin](docs/screenshots/screen6.png)` | Admin |
+| ![ToDoList](docs/screenshots/screen7.png)` | ToDoList |
 
 
 ## Container image
