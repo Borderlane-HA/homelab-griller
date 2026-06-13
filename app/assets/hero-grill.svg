@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 520" role="img" aria-label="Clean modern barbecue illustration">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fff7ed"/>
+      <stop offset="0.55" stop-color="#ffedd5"/>
+      <stop offset="1" stop-color="#fed7aa"/>
+    </linearGradient>
+    <radialGradient id="sun" cx="0.70" cy="0.25" r="0.5">
+      <stop offset="0" stop-color="#ffd166" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#ffd166" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="coal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#374151"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="520" fill="url(#sky)"/>
+  <rect width="1200" height="520" fill="url(#sun)"/>
+  <path d="M0 390c170-90 285-60 425-95 155-39 306-139 522-61 105 38 168 112 253 75v211H0Z" fill="#fdba74" opacity="0.42"/>
+  <path d="M0 430c150-62 314-38 467-59 178-24 304-106 490-51 94 28 163 89 243 56v144H0Z" fill="#431407" opacity="0.1"/>
+  <g transform="translate(420 105)">
+    <ellipse cx="190" cy="250" rx="230" ry="42" fill="#9a3412" opacity="0.18"/>
+    <path d="M40 170h300a52 52 0 0 1-52 52H92a52 52 0 0 1-52-52Z" fill="url(#coal)"/>
+    <path d="M32 155h316a18 18 0 0 1 18 18v8H14v-8a18 18 0 0 1 18-18Z" fill="#1f2937"/>
+    <path d="M62 140h256" stroke="#f97316" stroke-width="12" stroke-linecap="round" opacity="0.9"/>
+    <g stroke="#f9fafb" stroke-width="5" stroke-linecap="round" opacity="0.9">
+      <path d="M58 172h262"/><path d="M78 154v58"/><path d="M118 154v68"/><path d="M158 154v68"/><path d="M198 154v68"/><path d="M238 154v68"/><path d="M278 154v58"/>
+    </g>
+    <path d="M98 223l-36 98M282 223l36 98" stroke="#111827" stroke-width="14" stroke-linecap="round"/>
+    <path d="M65 320h270" stroke="#111827" stroke-width="10" stroke-linecap="round"/>
+    <circle cx="68" cy="335" r="18" fill="#111827"/><circle cx="318" cy="335" r="18" fill="#111827"/>
+    <g fill="#fff7ed">
+      <rect x="84" y="115" width="72" height="28" rx="14"/><rect x="188" y="111" width="96" height="32" rx="16"/>
+    </g>
+    <g fill="#ef4444" opacity="0.95">
+      <circle cx="110" cy="129" r="8"/><circle cx="214" cy="127" r="8"/><circle cx="252" cy="127" r="8"/>
+    </g>
+    <path d="M151 96c-4-33 25-41 23-72 33 28 61 43 50 99" fill="none" stroke="#f97316" stroke-width="13" stroke-linecap="round" opacity="0.75"/>
+    <path d="M183 93c2-22 23-27 16-51 24 22 37 33 29 71" fill="none" stroke="#fbbf24" stroke-width="9" stroke-linecap="round"/>
+  </g>
+  <g transform="translate(120 115)">
+    <rect x="0" y="0" width="250" height="210" rx="32" fill="#fff7ed" opacity="0.9"/>
+    <circle cx="68" cy="72" r="31" fill="#fb923c"/><rect x="111" y="46" width="94" height="16" rx="8" fill="#1f2937" opacity="0.85"/><rect x="111" y="76" width="120" height="14" rx="7" fill="#1f2937" opacity="0.35"/>
+    <rect x="38" y="124" width="174" height="18" rx="9" fill="#16a34a" opacity="0.75"/><rect x="38" y="158" width="126" height="18" rx="9" fill="#f97316" opacity="0.75"/>
+  </g>
+  <g transform="translate(895 115)">
+    <rect x="0" y="0" width="210" height="230" rx="32" fill="#111827" opacity="0.95"/>
+    <rect x="35" y="42" width="140" height="24" rx="12" fill="#f97316"/><rect x="35" y="88" width="120" height="18" rx="9" fill="#fff7ed" opacity="0.85"/><rect x="35" y="122" width="96" height="18" rx="9" fill="#fff7ed" opacity="0.6"/><rect x="35" y="156" width="132" height="18" rx="9" fill="#fff7ed" opacity="0.6"/>
+  </g>
+</svg>

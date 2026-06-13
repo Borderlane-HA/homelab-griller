@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 120" role="img" aria-label="HomeLab Griller by Pengu">
+  <defs>
+    <linearGradient id="g" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#ff7a18"/>
+      <stop offset="0.5" stop-color="#ffb347"/>
+      <stop offset="1" stop-color="#1f2937"/>
+    </linearGradient>
+  </defs>
+  <rect width="420" height="120" rx="28" fill="#111827"/>
+  <circle cx="66" cy="60" r="38" fill="url(#g)"/>
+  <path d="M43 56h46a19 19 0 0 1-19 19h-8a19 19 0 0 1-19-19Z" fill="#fff3e6"/>
+  <path d="M48 49c4-12 13-18 20-25 3 11 16 16 13 29" fill="none" stroke="#fff3e6" stroke-width="7" stroke-linecap="round"/>
+  <path d="M52 80h28M57 80l-8 17M75 80l8 17" stroke="#fff3e6" stroke-width="6" stroke-linecap="round"/>
+  <text x="122" y="52" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="30" font-weight="800" fill="#fff">HomeLab Griller</text>
+  <text x="124" y="82" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="600" fill="#ffb347">by Pengu</text>
+</svg>
