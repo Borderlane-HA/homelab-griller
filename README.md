@@ -33,23 +33,14 @@ Recommended screenshot files:
 
 | Screenshot | Area |
 | --- | --- |
-| ![Dashboard](docs/screenshots/screen1.png)` | Admin` |
-| Guest event page | `docs/screenshots/screen2.png` |
-| Admin dashboard | `docs/screenshots/screen3.png` |
-| Event editor | `docs/screenshots/screen4.png` |
-| Grill-master todo board | `docs/screenshots/screen4.png` |
-| Mobile guest order view | `docs/screenshots/screen5.png` |
-| Mobile guest order view | `docs/screenshots/screen6.png` |
-| Mobile guest order view | `docs/screenshots/screen7.png` |
+| ![Admin](docs/screenshots/screen1.png)` | Admin` |
+| ![Eat](docs/screenshots/screen2.png)` | Menu` |
+| ![Guest](docs/screenshots/screen3.png)` | NewGuest` |
+| ![Order](docs/screenshots/screen4.png)` | Guestorder` |
+| ![Status](docs/screenshots/screen5.png)` | Meal status` |
+| ![Admin](docs/screenshots/screen6.png)` | Admin` |
+| ![ToDoList](docs/screenshots/screen7.png)` | ToDoList` |
 
-Example Markdown after uploading your images:
-
-```md
-![Public dashboard](docs/screenshots/public-dashboard.png)
-![Guest event page](docs/screenshots/guest-event.png)
-![Admin dashboard](docs/screenshots/admin-dashboard.png)
-![Grill-master todo board](docs/screenshots/grillmaster-board.png)
-```
 
 ## Container image
 
