@@ -1,59 +1,256 @@
 # HomeLab Griller by Pengu
 
-A clean, modern BBQ event planner for your HomeLab. Run it as a Docker container, create BBQ events as admin, publish them for guests and work through all guest orders in a grill-master todo board.
+A clean, modern and self-hosted BBQ event planner for HomeLab setups. Create BBQ events, publish them for guests, let guests build their own orders and work through everything in a simple grill-master todo board.
 
 ![HomeLab Griller by Pengu](app/assets/logo.svg)
 
 ## Features
 
-- Docker-ready PHP + SQLite app
+- Self-hosted Docker container
+- PHP + SQLite, no external database required
 - Password-protected admin area
 - Default admin user: `Griller`
-- Admin password through `GRILLER_ADMIN_PASSWORD`
+- Admin password is configured at container runtime with `GRILLER_ADMIN_PASSWORD`
 - German and English included
-- Extendable language packs as JSON uploads from the admin area
-- Global reusable categories
-- Product catalog with selectable toppings/options
-- Deactivate or delete products, delete categories if unused
+- Extendable JSON language packs uploadable in the admin area
+- Global reusable categories such as burgers, sausages, sides, drinks and desserts
+- Product catalog with toppings/options
+- Mobile-friendly guest order page with large `-` / `+` quantity buttons
 - Doneness selection for beef/steak products
-- Event creation, publishing, closing and deletion
-- Clone existing BBQ events
-- Public guest event page
-- Guest joins with name and creates a menu/order
-- Quantity per item
-- Guest order status page with auto-refresh, shown above the menu
-- Admin sees all joined guests per event including order/item counts
-- Guests can be deleted in the event admin area, including their orders
-- Grill-master todo board with `Pending`, `In progress`, `Done`
-- SVG logo and hero illustration included
-- Persistent SQLite database in `./data`
+- BBQ events can be created, published, closed, deleted and cloned
+- Guests join public events with their name
+- Guests can build their own menu/order and see the order status at the top of the event page
+- Admin can see all joined guests per event
+- Guests can be removed from an event, including their orders
+- Grill-master todo board with `Pending`, `In progress` and `Done`
+- Persistent SQLite database in the mounted `data` directory
 
-## Screens / Areas
+## Screenshots
 
-- `/` public dashboard with public events
-- `?r=admin_login` admin login
-- Admin dashboard for events, categories, products and language packs
-- Event kitchen board for the grill master
-- Guest overview and guest deletion inside each event admin page
-- Public event link per BBQ event
+Place your screenshots in `docs/screenshots/` and add them here.
 
-## Quick start
+Recommended screenshot files:
 
-```bash
-cp .env.example .env
-nano .env
+| Area | Suggested file |
+| --- | --- |
+| Public dashboard | `docs/screenshots/public-dashboard.png` |
+| Guest event page | `docs/screenshots/guest-event.png` |
+| Admin dashboard | `docs/screenshots/admin-dashboard.png` |
+| Event editor | `docs/screenshots/event-editor.png` |
+| Grill-master todo board | `docs/screenshots/grillmaster-board.png` |
+| Mobile guest order view | `docs/screenshots/mobile-order.png` |
+
+Example Markdown after uploading your images:
+
+```md
+![Public dashboard](docs/screenshots/public-dashboard.png)
+![Guest event page](docs/screenshots/guest-event.png)
+![Admin dashboard](docs/screenshots/admin-dashboard.png)
+![Grill-master todo board](docs/screenshots/grillmaster-board.png)
 ```
 
-Set a strong password:
+## Container image
 
-```env
-GRILLER_ADMIN_PASSWORD=your-strong-password
-TZ=Europe/Berlin
+The recommended public image name for this repository is:
+
+```text
+ghcr.io/borderlane-ha/homelab-griller:latest
+```
+
+If you fork or rename the repository, replace `borderlane-ha/homelab-griller` with your own GitHub owner and repository name.
+
+## Run with Docker Compose
+
+Create a folder on your Docker host:
+
+```bash
+mkdir -p homelab-griller/data homelab-griller/lang
+cd homelab-griller
+```
+
+Create `docker-compose.yml`:
+
+```yaml
+services:
+  homelab-griller:
+    image: ghcr.io/borderlane-ha/homelab-griller:latest
+    container_name: homelab-griller
+    restart: unless-stopped
+    ports:
+      - "8088:8080"
+    environment:
+      GRILLER_ADMIN_PASSWORD: "change-this-password"
+      GRILLER_DEFAULT_LANGUAGE: "de"
+      TZ: "Europe/Berlin"
+    volumes:
+      - ./data:/var/www/html/data
+      - ./lang:/var/www/html/lang/custom
 ```
 
 Start the container:
 
 ```bash
+docker compose up -d
+```
+
+Open the app:
+
+```text
+http://SERVER-IP:8088
+```
+
+Admin login:
+
+```text
+User: Griller
+Password: value from GRILLER_ADMIN_PASSWORD
+```
+
+## Run with Docker CLI
+
+```bash
+docker run -d \
+  --name homelab-griller \
+  --restart unless-stopped \
+  -p 8088:8080 \
+  -e GRILLER_ADMIN_PASSWORD="change-this-password" \
+  -e GRILLER_DEFAULT_LANGUAGE="de" \
+  -e TZ="Europe/Berlin" \
+  -v ./data:/var/www/html/data \
+  -v ./lang:/var/www/html/lang/custom \
+  ghcr.io/borderlane-ha/homelab-griller:latest
+```
+
+## Password handling
+
+The admin password is not baked into the Docker image. It is read when the container starts.
+
+Set it with:
+
+```yaml
+environment:
+  GRILLER_ADMIN_PASSWORD: "your-secure-password"
+```
+
+The admin username is always:
+
+```text
+Griller
+```
+
+If you change `GRILLER_ADMIN_PASSWORD`, recreate or restart the container:
+
+```bash
+docker compose up -d
+```
+
+The SQLite database remains untouched because it is stored in the mounted `./data` folder.
+
+## Publish your own Docker image with GitHub Actions
+
+This repository can publish a Docker image automatically to GitHub Container Registry (`ghcr.io`). GitHub Actions can publish packages with the built-in `GITHUB_TOKEN`, so no personal access token is required for the default setup.
+
+Create this workflow file if it is not already present:
+
+```text
+.github/workflows/docker-publish.yml
+```
+
+Workflow content:
+
+```yaml
+name: Build and publish Docker image
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=tag
+            type=sha
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+```
+
+After pushing to `main`, open:
+
+```text
+GitHub repository → Actions
+```
+
+Wait until the workflow is green. The image for this repository will be:
+
+```text
+ghcr.io/borderlane-ha/homelab-griller:latest
+```
+
+## Make the GitHub Container Registry package public
+
+After the first successful build, GitHub creates a package for the container image. It may be private at first.
+
+To make it public:
+
+1. Open the GitHub repository.
+2. Look at the right sidebar for `Packages`.
+3. Open the package `homelab-griller`.
+4. Open `Package settings`.
+5. Choose `Change visibility`.
+6. Set it to `Public`.
+
+After that, users can pull the image without logging in:
+
+```bash
+docker pull ghcr.io/borderlane-ha/homelab-griller:latest
+```
+
+## Local development build
+
+If you want to build from the source code instead of using GHCR:
+
+```bash
+cp .env.example .env
+nano .env
 docker compose up -d --build
 ```
 
@@ -63,21 +260,21 @@ Open:
 http://localhost:8088
 ```
 
-Login:
-
-```text
-User: Griller
-Password: value from GRILLER_ADMIN_PASSWORD
-```
-
 ## Update
+
+When using the published image:
 
 ```bash
 docker compose pull
-docker compose up -d --build
+docker compose up -d
 ```
 
-Your data is stored in `./data` and survives container rebuilds.
+When building locally from the source code:
+
+```bash
+git pull
+docker compose up -d --build
+```
 
 ## Backup
 
@@ -89,13 +286,13 @@ cp -a data data-backup-$(date +%Y%m%d)
 docker compose up -d
 ```
 
-The SQLite database is located at:
+The SQLite database is stored here:
 
 ```text
 ./data/griller.sqlite
 ```
 
-Uploaded language packs are stored in:
+Uploaded language packs are stored here:
 
 ```text
 ./data/lang/
@@ -122,7 +319,7 @@ Example:
 }
 ```
 
-Missing keys automatically fall back to the built-in German/English texts.
+Missing translation keys fall back to the built-in language files.
 
 A sample file is included at:
 
@@ -130,25 +327,30 @@ A sample file is included at:
 docs/example-fr.json
 ```
 
-## Suggested GitHub repository name
+## Recommended first setup inside the app
 
-```text
-homelab-griller-by-pengu
-```
+1. Open the admin area.
+2. Check the default categories.
+3. Add or edit products.
+4. Create a BBQ event.
+5. Select the products available for that event.
+6. Publish the event.
+7. Share the public event link or QR code with guests.
+8. Open the grill-master todo board during the BBQ.
 
 ## Security notes
 
-- Change `GRILLER_ADMIN_PASSWORD` before exposing the app.
-- Put the container behind a reverse proxy with HTTPS when using it outside your LAN.
-- SQLite is perfect for small private BBQ events. For very large public use, a larger database backend would be a future improvement.
+- Always change `GRILLER_ADMIN_PASSWORD` before exposing the app.
+- Use a reverse proxy with HTTPS when the app is reachable outside your LAN.
+- SQLite is ideal for small private BBQ events. For very large public use, a larger database backend would be a future improvement.
 
 ## Roadmap ideas
 
-- QR code per public event
+- Built-in QR code per public event
 - Optional guest PIN or invitation code
-- Export shopping list grouped by category
+- Shopping list export grouped by category
 - Print-friendly kitchen tickets
-- Push notifications via Home Assistant webhook
+- Home Assistant webhook notifications
 - Dark mode
 - Drag-and-drop sorting for categories and products
 
