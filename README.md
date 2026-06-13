@@ -194,6 +194,7 @@ Run the following command directly on your Proxmox host:
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Borderlane-HA/homelab-griller/main/scripts/proxmox-lxc-install.sh)"
 ```
+The root password will be displayed at the end of the installation.
 
 The installer will create a Debian LXC container, install Docker, deploy HomeLab Griller and start the application automatically.
 
@@ -273,13 +274,13 @@ docs/example-fr.json
 
 ## Roadmap ideas
 
-- Built-in QR code per public event
-- Optional guest PIN or invitation code
+- ~~Built-in QR code per public event~~
+- ~~Optional guest PIN or invitation code~~
 - Shopping list export grouped by category
 - Print-friendly kitchen tickets
 - Home Assistant webhook notifications
 - Dark mode
-- Drag-and-drop sorting for categories and products
+- ~~Drag-and-drop sorting for categories and products~~
 
 ## License
 
