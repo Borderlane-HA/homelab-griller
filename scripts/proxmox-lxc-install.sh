@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 APP_IMAGE="${APP_IMAGE:-ghcr.io/borderlane-ha/homelab-griller:latest}"
 CT_HOSTNAME="${CT_HOSTNAME:-homelab-griller}"
-APP_PORT="${APP_PORT:-8088}"
+APP_PORT="${APP_PORT:-8091}"
 TZ_VALUE="${TZ_VALUE:-Europe/Berlin}"
 DEFAULT_LANGUAGE="${GRILLER_DEFAULT_LANGUAGE:-de}"
 MEMORY="${MEMORY:-1024}"
@@ -164,7 +164,7 @@ services:
     container_name: homelab-griller
     restart: unless-stopped
     ports:
-      - "\${APP_PORT:-8088}:80"
+      - "\${APP_PORT:-8091}:80"
     environment:
       TZ: "\${TZ:-Europe/Berlin}"
       GRILLER_ADMIN_PASSWORD: "\${GRILLER_ADMIN_PASSWORD}"
