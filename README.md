@@ -70,7 +70,7 @@ services:
     container_name: homelab-griller
     restart: unless-stopped
     ports:
-      - "8088:8080"
+      - "8091:80"
     environment:
       GRILLER_ADMIN_PASSWORD: "change-this-password"
       GRILLER_DEFAULT_LANGUAGE: "de"
@@ -89,7 +89,7 @@ docker compose up -d
 Open the app:
 
 ```text
-http://SERVER-IP:8088
+http://SERVER-IP:8091
 ```
 
 Admin login:
@@ -105,7 +105,7 @@ Password: value from GRILLER_ADMIN_PASSWORD
 docker run -d \
   --name homelab-griller \
   --restart unless-stopped \
-  -p 8088:8080 \
+  -p 8091:80 \
   -e GRILLER_ADMIN_PASSWORD="change-this-password" \
   -e GRILLER_DEFAULT_LANGUAGE="de" \
   -e TZ="Europe/Berlin" \
@@ -250,7 +250,7 @@ docker compose up -d --build
 Open:
 
 ```text
-http://localhost:8088
+http://localhost:8091
 ```
 
 ## Update
