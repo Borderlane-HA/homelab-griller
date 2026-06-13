@@ -186,6 +186,146 @@ Uploaded language packs are stored here:
 ./data/lang/
 ```
 
+## Run on Proxmox VE
+
+The cleanest Proxmox setup is to run HomeLab Griller inside a small Debian VM and run Docker Compose there. This keeps Docker separated from the Proxmox host and gives you clean backups, snapshots and network isolation.
+
+A lightweight Debian LXC container can also work, but a VM is the most compatible option, especially if you want the fewest Docker-related permission issues.
+
+### Recommended setup: Debian VM with Docker Compose
+
+Suggested VM size for a normal private BBQ/event setup:
+
+| Resource | Recommended value |
+| --- | --- |
+| OS | Debian 12 or Debian 13 minimal |
+| CPU | 1 vCPU |
+| RAM | 512 MB to 1 GB |
+| Disk | 4 GB to 8 GB |
+| Network | VirtIO bridge, DHCP reservation or static IP |
+
+In Proxmox:
+
+1. Upload a Debian ISO to your Proxmox ISO storage.
+2. Create a new VM.
+3. Use `q35` or the default machine type.
+4. Use a VirtIO disk and VirtIO network adapter.
+5. Install Debian without a desktop environment.
+6. Give the VM a static IP address or create a DHCP reservation.
+7. SSH into the VM.
+
+Install Docker Engine and the Docker Compose plugin inside the VM:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+```
+
+Create the application folder:
+
+```bash
+mkdir -p ~/homelab-griller/data
+cd ~/homelab-griller
+```
+
+Create `docker-compose.yml`:
+
+```yaml
+services:
+  homelab-griller:
+    image: ghcr.io/borderlane-ha/homelab-griller:latest
+    container_name: homelab-griller
+    restart: unless-stopped
+    ports:
+      - "8088:80"
+    environment:
+      GRILLER_ADMIN_PASSWORD: "change-this-password"
+      GRILLER_DEFAULT_LANGUAGE: "de"
+      TZ: "Europe/Berlin"
+    volumes:
+      - ./data:/var/www/html/data
+```
+
+Start HomeLab Griller:
+
+```bash
+docker compose up -d
+```
+
+Open the app:
+
+```text
+http://VM-IP:8088
+```
+
+Admin login:
+
+```text
+User: Griller
+Password: value from GRILLER_ADMIN_PASSWORD
+```
+
+If the Proxmox firewall is enabled for the VM, allow TCP port `8088` or use a reverse proxy in front of the app.
+
+### Alternative setup: Debian LXC container
+
+A Debian LXC container is more lightweight than a VM, but Docker inside LXC needs nesting support. Use this only if you are comfortable troubleshooting LXC permissions. If Docker behaves unexpectedly, switch to the VM setup above.
+
+In Proxmox, create a Debian LXC container with approximately:
+
+| Resource | Recommended value |
+| --- | --- |
+| CT type | Unprivileged container |
+| OS | Debian 12 or Debian 13 |
+| CPU | 1 core |
+| RAM | 512 MB to 1 GB |
+| Disk | 4 GB to 8 GB |
+| Features | `Nesting` enabled |
+
+Enable nesting from the Proxmox UI:
+
+```text
+Container → Options → Features → Nesting
+```
+
+Or from the Proxmox host shell, replace `<CTID>` with your container ID:
+
+```bash
+pct set <CTID> -features nesting=1,keyctl=1
+pct restart <CTID>
+```
+
+Then enter the container shell and install Docker with the same Docker installation commands shown in the VM section. After that, use the same `docker-compose.yml` and start command.
+
+### Proxmox backup recommendation
+
+Back up either the whole VM/LXC via Proxmox Backup or at least the mounted data directory:
+
+```bash
+cd ~/homelab-griller
+cp -a data data-backup-$(date +%Y%m%d-%H%M)
+```
+
+The important persistent files are stored here:
+
+```text
+~/homelab-griller/data/griller.sqlite
+~/homelab-griller/data/lang/
+```
+
+Do not install Docker containers directly on the Proxmox host unless you intentionally manage Docker there. Keeping the app inside a VM or LXC makes updates, backups and troubleshooting cleaner.
+
 ## Language packs
 
 Built-in languages:
