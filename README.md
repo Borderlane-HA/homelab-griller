@@ -186,7 +186,7 @@ Uploaded language packs are stored here:
 ./data/lang/
 ```
 
-## Proxmox Install Script - draft not working now
+## Proxmox Install Script
 
 HomeLab Griller can be installed on Proxmox VE with a single command.
 Run the following command directly on your Proxmox host:
