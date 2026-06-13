@@ -19,174 +19,281 @@ if [ "${EUID}" -ne 0 ]; then
   exit 1
 fi
 
-if ! command -v pct >/dev/null 2>&1; then
-  echo "pct was not found. This installer must be run on a Proxmox VE host."
-  exit 1
-fi
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "Required command not found: $1"
+    echo "This script must be run on a Proxmox VE host."
+    exit 1
+  fi
+}
 
-if ! command -v pveam >/dev/null 2>&1; then
-  echo "pveam was not found. This installer must be run on a Proxmox VE host."
-  exit 1
-fi
+require_cmd pct
+require_cmd pveam
+require_cmd pvesm
+require_cmd awk
+require_cmd grep
 
-next_ctid() {
+log() {
+  echo ""
+  echo "==> $*"
+}
+
+fail() {
+  echo ""
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+generate_password() {
+  local password
+
+  # Avoid set -o pipefail breaking on SIGPIPE when head closes early.
+  password="$(LC_ALL=C tr -dc 'A-Za-z0-9_@#%+=' </dev/urandom | head -c 24 || true)"
+
+  if [ -z "${password}" ]; then
+    password="HomeLabGriller$(date +%s)"
+  fi
+
+  printf '%s' "${password}"
+}
+
+default_ctid() {
   local id
-  for id in $(seq 200 999); do
-    if ! pct status "$id" >/dev/null 2>&1; then
-      echo "$id"
+  id="$(pvesh get /cluster/nextid 2>/dev/null || true)"
+
+  if [[ "${id}" =~ ^[0-9]+$ ]]; then
+    printf '%s' "${id}"
+  else
+    printf '200'
+  fi
+}
+
+ask_value() {
+  local var_name="$1"
+  local label="$2"
+  local default_value="$3"
+  local current_value="${!var_name:-}"
+  local input=""
+
+  if [ -n "${current_value}" ]; then
+    return 0
+  fi
+
+  if [ -t 0 ]; then
+    read -r -p "${label} [${default_value}]: " input || true
+    printf -v "${var_name}" '%s' "${input:-${default_value}}"
+  else
+    printf -v "${var_name}" '%s' "${default_value}"
+  fi
+}
+
+ask_secret() {
+  local var_name="$1"
+  local label="$2"
+  local current_value="${!var_name:-}"
+  local input=""
+
+  if [ -n "${current_value}" ]; then
+    return 0
+  fi
+
+  if [ -t 0 ]; then
+    read -r -s -p "${label}: " input || true
+    echo ""
+  fi
+
+  if [ -z "${input}" ]; then
+    input="$(generate_password)"
+    echo "No value entered for ${label}. A random password was generated."
+  fi
+
+  printf -v "${var_name}" '%s' "${input}"
+}
+
+yaml_quote() {
+  local value="$1"
+  value="${value//\'/\'\'}"
+  printf "'%s'" "${value}"
+}
+
+get_latest_debian_template() {
+  pveam update >/dev/null 2>&1 || true
+
+  pveam available --section system \
+    | awk -v version="debian-${DEBIAN_VERSION}-standard" '$2 ~ version && $2 ~ /amd64/ {print $2}' \
+    | sort -V \
+    | tail -n 1
+}
+
+wait_for_lxc_network() {
+  local attempt
+
+  for attempt in $(seq 1 30); do
+    if pct exec "${CTID}" -- bash -lc "getent hosts deb.debian.org >/dev/null 2>&1"; then
       return 0
     fi
+    sleep 2
   done
+
   return 1
 }
 
-storage_exists() {
-  pvesm status 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$1"
+run_in_lxc() {
+  pct exec "${CTID}" -- bash -lc "$1"
 }
 
-first_storage() {
-  pvesm status 2>/dev/null | awk 'NR>1 {print $1; exit}'
-}
+cat <<'BANNER'
+HomeLab Griller by Pengu - Proxmox LXC installer
+BANNER
 
-CTID="${CTID:-$(next_ctid)}"
-STORAGE="${STORAGE:-}"
-if [ -z "${STORAGE}" ]; then
-  if storage_exists local-lvm; then
-    STORAGE="local-lvm"
-  elif storage_exists local; then
-    STORAGE="local"
-  else
-    STORAGE="$(first_storage)"
-  fi
+DEFAULT_CTID="$(default_ctid)"
+
+ask_value CTID "Container ID" "${DEFAULT_CTID}"
+ask_value CT_HOSTNAME "Hostname" "${CT_HOSTNAME}"
+ask_value STORAGE "Storage" "local-lvm"
+ask_value BRIDGE "Bridge" "${BRIDGE}"
+ask_value IP_CONFIG "Network IP config" "${IP_CONFIG}"
+ask_value APP_PORT "App port" "${APP_PORT}"
+ask_secret GRILLER_ADMIN_PASSWORD "Admin password for user Griller"
+
+ROOT_PASSWORD="${ROOT_PASSWORD:-$(generate_password)}"
+
+[[ "${CTID}" =~ ^[0-9]+$ ]] || fail "Container ID must be numeric."
+
+if pct status "${CTID}" >/dev/null 2>&1; then
+  fail "Container ID ${CTID} already exists. Choose a free Container ID."
 fi
 
-if [ -t 0 ]; then
-  echo "HomeLab Griller by Pengu - Proxmox LXC installer"
-  echo
-  read -r -p "Container ID [${CTID}]: " INPUT_CTID
-  CTID="${INPUT_CTID:-${CTID}}"
-  read -r -p "Hostname [${CT_HOSTNAME}]: " INPUT_HOSTNAME
-  CT_HOSTNAME="${INPUT_HOSTNAME:-${CT_HOSTNAME}}"
-  read -r -p "Storage [${STORAGE}]: " INPUT_STORAGE
-  STORAGE="${INPUT_STORAGE:-${STORAGE}}"
-  read -r -p "Bridge [${BRIDGE}]: " INPUT_BRIDGE
-  BRIDGE="${INPUT_BRIDGE:-${BRIDGE}}"
-  read -r -p "Network IP config [${IP_CONFIG}] (use dhcp or e.g. 192.168.1.50/24,gw=192.168.1.1): " INPUT_IP
-  IP_CONFIG="${INPUT_IP:-${IP_CONFIG}}"
-  read -r -p "App port [${APP_PORT}]: " INPUT_PORT
-  APP_PORT="${INPUT_PORT:-${APP_PORT}}"
-  read -r -s -p "Admin password for user Griller: " GRILLER_ADMIN_PASSWORD_INPUT
-  echo
-  GRILLER_ADMIN_PASSWORD="${GRILLER_ADMIN_PASSWORD:-${GRILLER_ADMIN_PASSWORD_INPUT}}"
-fi
+pvesm status | awk 'NR>1 {print $1}' | grep -qx "${STORAGE}" || fail "Storage '${STORAGE}' was not found."
+ip link show "${BRIDGE}" >/dev/null 2>&1 || fail "Bridge '${BRIDGE}' was not found."
 
-if [ -z "${GRILLER_ADMIN_PASSWORD:-}" ]; then
-  echo "GRILLER_ADMIN_PASSWORD is required."
-  echo "Example: GRILLER_ADMIN_PASSWORD='my-password' bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Borderlane-HA/homelab-griller/main/scripts/proxmox-lxc-install.sh)\""
-  exit 1
-fi
+TEMPLATE="${TEMPLATE:-$(get_latest_debian_template)}"
+[ -n "${TEMPLATE}" ] || fail "Could not find a Debian ${DEBIAN_VERSION} amd64 LXC template via pveam."
 
-if pct status "$CTID" >/dev/null 2>&1; then
-  echo "Container ID ${CTID} already exists."
-  exit 1
-fi
+log "Downloading template ${TEMPLATE} to ${TEMPLATE_STORAGE} if needed"
+pveam download "${TEMPLATE_STORAGE}" "${TEMPLATE}"
 
-if ! storage_exists "$STORAGE"; then
-  echo "Storage '${STORAGE}' does not exist."
-  echo "Available storages:"
-  pvesm status | awk 'NR>1 {print "- " $1}'
-  exit 1
-fi
+log "Creating LXC ${CTID} (${CT_HOSTNAME})"
+pct create "${CTID}" "${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE}" \
+  --hostname "${CT_HOSTNAME}" \
+  --ostype debian \
+  --unprivileged 1 \
+  --features nesting=1,keyctl=1,fuse=1 \
+  --password "${ROOT_PASSWORD}" \
+  --storage "${STORAGE}" \
+  --rootfs "${STORAGE}:${DISK_SIZE}" \
+  --memory "${MEMORY}" \
+  --cores "${CORES}" \
+  --net0 "name=eth0,bridge=${BRIDGE},ip=${IP_CONFIG}" \
+  --onboot 1 \
+  --start 1
 
-if ! storage_exists "$TEMPLATE_STORAGE"; then
-  echo "Template storage '${TEMPLATE_STORAGE}' does not exist."
-  echo "Set TEMPLATE_STORAGE to a storage that can hold container templates."
-  exit 1
-fi
-
-TEMPLATE="$(pveam available --section system | awk -v ver="debian-${DEBIAN_VERSION}-standard" '$2 ~ ver {print $2}' | tail -n 1)"
-if [ -z "${TEMPLATE}" ]; then
-  echo "Could not find a Debian ${DEBIAN_VERSION} LXC template via pveam."
-  exit 1
-fi
-
-TEMPLATE_PATH="${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE}"
-if [ ! -f "/var/lib/vz/template/cache/${TEMPLATE}" ] || [ "${TEMPLATE_STORAGE}" != "local" ]; then
-  echo "Downloading template ${TEMPLATE} to ${TEMPLATE_STORAGE}..."
-  pveam download "${TEMPLATE_STORAGE}" "${TEMPLATE}" || true
-fi
-
-ROOT_PASSWORD="${ROOT_PASSWORD:-$(tr -dc 'A-Za-z0-9_@#%+=' </dev/urandom | head -c 24)}"
-
-NET0="name=eth0,bridge=${BRIDGE},ip=${IP_CONFIG}"
-
-echo "Creating LXC ${CTID} (${CT_HOSTNAME})..."
-pct create "${CTID}" "${TEMPLATE_PATH}" \
-  -hostname "${CT_HOSTNAME}" \
-  -unprivileged 1 \
-  -features nesting=1,keyctl=1 \
-  -cores "${CORES}" \
-  -memory "${MEMORY}" \
-  -swap 512 \
-  -rootfs "${STORAGE}:${DISK_SIZE}" \
-  -net0 "${NET0}" \
-  -onboot 1 \
-  -start 1 \
-  -password "${ROOT_PASSWORD}"
-
-echo "Waiting for container network..."
+log "Waiting for LXC startup"
 sleep 8
-pct exec "${CTID}" -- bash -lc 'for i in $(seq 1 30); do ping -c1 -W1 deb.debian.org >/dev/null 2>&1 && exit 0; sleep 2; done; exit 1' || {
-  echo "The container could not reach the internet. Check bridge, DHCP/static IP and DNS."
-  exit 1
+
+if ! pct status "${CTID}" | grep -q "status: running"; then
+  fail "LXC ${CTID} is not running after creation."
+fi
+
+log "Waiting for network/DNS inside LXC"
+if ! wait_for_lxc_network; then
+  echo "Warning: DNS check inside LXC timed out. Continuing with apt update anyway."
+fi
+
+log "Installing Docker inside LXC"
+pct exec "${CTID}" -- bash -s <<'INSTALL_DOCKER'
+set -Eeuo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+for i in $(seq 1 10); do
+  apt-get update && break
+  sleep 3
+
+  if [ "$i" -eq 10 ]; then
+    exit 1
+  fi
+done
+
+apt-get install -y ca-certificates curl gnupg fuse-overlayfs
+
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+
+. /etc/os-release
+ARCH="$(dpkg --print-architecture)"
+
+echo "deb [arch=${ARCH} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian ${VERSION_CODENAME} stable" > /etc/apt/sources.list.d/docker.list
+
+apt-get update
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+mkdir -p /etc/docker
+
+cat >/etc/docker/daemon.json <<'JSON'
+{
+  "storage-driver": "fuse-overlayfs",
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  }
 }
+JSON
 
-echo "Installing Docker and HomeLab Griller inside the container..."
-pct exec "${CTID}" -- bash -lc "apt-get update && apt-get install -y ca-certificates curl gnupg"
-pct exec "${CTID}" -- bash -lc "install -m 0755 -d /etc/apt/keyrings && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc && chmod a+r /etc/apt/keyrings/docker.asc"
-pct exec "${CTID}" -- bash -lc 'ARCH=$(dpkg --print-architecture); . /etc/os-release; echo "deb [arch=${ARCH} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian ${VERSION_CODENAME} stable" > /etc/apt/sources.list.d/docker.list'
-pct exec "${CTID}" -- bash -lc "apt-get update && apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
+systemctl enable docker
+systemctl restart docker
 
-pct exec "${CTID}" -- bash -lc "mkdir -p /opt/homelab-griller/data && chmod 755 /opt/homelab-griller"
+docker version >/dev/null
+INSTALL_DOCKER
 
-TMP_ENV="$(mktemp)"
-TMP_COMPOSE="$(mktemp)"
-cat > "${TMP_ENV}" <<ENV_FILE
-GRILLER_ADMIN_PASSWORD=${GRILLER_ADMIN_PASSWORD}
-GRILLER_DEFAULT_LANGUAGE=${DEFAULT_LANGUAGE}
-TZ=${TZ_VALUE}
-APP_PORT=${APP_PORT}
-ENV_FILE
-cat > "${TMP_COMPOSE}" <<COMPOSE_FILE
+log "Deploying HomeLab Griller"
+
+run_in_lxc "mkdir -p /opt/homelab-griller/data"
+
+APP_IMAGE_Q="$(yaml_quote "${APP_IMAGE}")"
+TZ_VALUE_Q="$(yaml_quote "${TZ_VALUE}")"
+DEFAULT_LANGUAGE_Q="$(yaml_quote "${DEFAULT_LANGUAGE}")"
+GRILLER_ADMIN_PASSWORD_Q="$(yaml_quote "${GRILLER_ADMIN_PASSWORD}")"
+APP_PORT_Q="$(yaml_quote "${APP_PORT}:80")"
+
+pct exec "${CTID}" -- bash -s <<INSTALL_APP
+set -Eeuo pipefail
+
+cat >/opt/homelab-griller/docker-compose.yml <<'COMPOSE'
 services:
   homelab-griller:
-    image: ${APP_IMAGE}
+    image: ${APP_IMAGE_Q}
     container_name: homelab-griller
     restart: unless-stopped
     ports:
-      - "\${APP_PORT:-8091}:80"
+      - ${APP_PORT_Q}
     environment:
-      TZ: "\${TZ:-Europe/Berlin}"
-      GRILLER_ADMIN_PASSWORD: "\${GRILLER_ADMIN_PASSWORD}"
-      GRILLER_DEFAULT_LANGUAGE: "\${GRILLER_DEFAULT_LANGUAGE:-de}"
+      TZ: ${TZ_VALUE_Q}
+      GRILLER_ADMIN_PASSWORD: ${GRILLER_ADMIN_PASSWORD_Q}
+      GRILLER_DEFAULT_LANGUAGE: ${DEFAULT_LANGUAGE_Q}
     volumes:
       - ./data:/var/www/html/data
-COMPOSE_FILE
-pct push "${CTID}" "${TMP_ENV}" /opt/homelab-griller/.env -perms 600
-pct push "${CTID}" "${TMP_COMPOSE}" /opt/homelab-griller/docker-compose.yml -perms 644
-rm -f "${TMP_ENV}" "${TMP_COMPOSE}"
+COMPOSE
 
-pct exec "${CTID}" -- bash -lc "cd /opt/homelab-griller && docker compose pull && docker compose up -d"
+cd /opt/homelab-griller
+docker compose pull
+docker compose up -d
+INSTALL_APP
 
-CT_IP="$(pct exec "${CTID}" -- bash -lc "hostname -I | awk '{print \$1}'" 2>/dev/null | tr -d '\r')"
+CT_IP="$(pct exec "${CTID}" -- hostname -I 2>/dev/null | awk '{print $1}' || true)"
 
-echo
-echo "HomeLab Griller by Pengu is installed."
+log "Installation finished"
+
 echo "Container ID: ${CTID}"
-echo "App directory in LXC: /opt/homelab-griller"
-echo "Data directory in LXC: /opt/homelab-griller/data"
-echo "Admin user: Griller"
+echo "Hostname: ${CT_HOSTNAME}"
 echo "Open: http://${CT_IP:-LXC-IP}:${APP_PORT}"
-echo
-echo "Manage it with: pct enter ${CTID}"
-echo "Update it later inside the LXC with: cd /opt/homelab-griller && docker compose pull && docker compose up -d"
+echo "Admin username: Griller"
+echo "Admin password: ${GRILLER_ADMIN_PASSWORD}"
+echo "LXC root password: ${ROOT_PASSWORD}"
+echo ""
+echo "Data directory inside LXC: /opt/homelab-griller/data"
+echo "Useful commands:"
+echo "  pct enter ${CTID}"
+echo "  pct exec ${CTID} -- bash -lc 'cd /opt/homelab-griller && docker compose ps'"
+echo "  pct exec ${CTID} -- bash -lc 'cd /opt/homelab-griller && docker compose logs -f'"
