@@ -248,7 +248,7 @@ services:
     container_name: homelab-griller
     restart: unless-stopped
     ports:
-      - "8088:80"
+      - "8091:80"
     environment:
       GRILLER_ADMIN_PASSWORD: "change-this-password"
       GRILLER_DEFAULT_LANGUAGE: "de"
@@ -266,7 +266,7 @@ docker compose up -d
 Open the app:
 
 ```text
-http://VM-IP:8088
+http://VM-IP:8091
 ```
 
 Admin login:
@@ -276,7 +276,7 @@ User: Griller
 Password: value from GRILLER_ADMIN_PASSWORD
 ```
 
-If the Proxmox firewall is enabled for the VM, allow TCP port `8088` or use a reverse proxy in front of the app.
+If the Proxmox firewall is enabled for the VM, allow TCP port `8091` or use a reverse proxy in front of the app.
 
 ### Alternative setup: Debian LXC container
 
