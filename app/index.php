@@ -575,7 +575,7 @@ function event_menu_items(int $eventId): array {
 function show_guest_order_form(array $event, array $guest): void {
     if ($event['status'] !== 'public') { return; }
     $items = event_menu_items((int)$event['id']);
-    echo '<div class="card"><h3>' . h(t('menu')) . '</h3><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="order"><div class="grid">';
+    echo '<div class="card"><h3>' . h(t('menu')) . '</h3><form method="post" data-order-form="1"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="order"><div class="grid">';
     $lastCat = '';
     foreach ($items as $item) {
         if ($lastCat !== $item['category_name']) { $lastCat = $item['category_name']; echo '<h3 style="margin:18px 0 0">' . h($item['category_icon'] . ' ' . $item['category_name']) . '</h3>'; }
@@ -594,7 +594,29 @@ function show_guest_status(array $event, array $guest): void {
     echo '<div class="section"><div class="card"><h3>' . h(t('order_status')) . '</h3><p class="muted">' . h(t('ready_hint')) . '</p>';
     if (!$items) { echo '<div class="empty">' . h(t('no_items_selected')) . '</div>'; }
     else { echo '<div class="status-panel">'; foreach ($items as $it) { $opts = decode_options($it['options_json']); echo '<div class="status-item"><div><strong>' . h($it['quantity'] . '× ' . $it['category_icon'] . ' ' . $it['product_name']) . '</strong><br><span class="muted">' . h(implode(', ', $opts)) . ($it['doneness'] ? ' · ' . h(doneness_options()[$it['doneness']] ?? $it['doneness']) : '') . ($it['note'] ? ' · ' . h($it['note']) : '') . '</span></div><span class="pill ' . h($it['status']) . '">' . h(status_label($it['status'])) . '</span></div>'; } echo '</div>'; }
-    echo '</div></div><script>setTimeout(()=>location.reload(),15000);</script>';
+    echo '</div></div><script>
+window.addEventListener("DOMContentLoaded", function () {
+  const form = document.querySelector("form[data-order-form]");
+  const hasOpenSelection = function () {
+    if (!form) { return false; }
+    return Array.from(form.elements).some(function (el) {
+      if (!el.name || el.type === "hidden" || el.type === "submit" || el.tagName === "BUTTON") { return false; }
+      if ((el.type === "checkbox" || el.type === "radio") && el.checked) { return true; }
+      if (el.type === "number") { return Number(el.value || 0) > Number(el.min || 0); }
+      if ((el.tagName === "SELECT" || el.tagName === "TEXTAREA" || el.tagName === "INPUT") && el.value && el.value.trim() !== "") { return true; }
+      return false;
+    });
+  };
+  function refreshWhenSafe() {
+    if (hasOpenSelection()) {
+      setTimeout(refreshWhenSafe, 15000);
+      return;
+    }
+    location.reload();
+  }
+  setTimeout(refreshWhenSafe, 15000);
+});
+</script>';
 }
 
 function page_admin_kitchen(): void {
