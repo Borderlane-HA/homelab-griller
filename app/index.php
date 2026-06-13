@@ -64,14 +64,24 @@ function init_db(PDO $pdo): void {
         FOREIGN KEY(event_id) REFERENCES events(id) ON DELETE CASCADE,
         FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE
     )");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS guest_profiles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        normalized_name TEXT NOT NULL,
+        pin_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )");
     $pdo->exec("CREATE TABLE IF NOT EXISTS guests (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         event_id INTEGER NOT NULL,
+        profile_id INTEGER,
         name TEXT NOT NULL,
         token TEXT NOT NULL UNIQUE,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(event_id) REFERENCES events(id) ON DELETE CASCADE
     )");
+    ensure_column($pdo, 'guests', 'profile_id', 'INTEGER');
     $pdo->exec("CREATE TABLE IF NOT EXISTS orders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         event_id INTEGER NOT NULL,
@@ -101,6 +111,15 @@ function init_db(PDO $pdo): void {
     if ($count === 0) {
         seed_data($pdo);
     }
+}
+
+
+function ensure_column(PDO $pdo, string $table, string $column, string $definition): void {
+    $stmt = $pdo->query('PRAGMA table_info(' . $table . ')');
+    foreach ($stmt->fetchAll() as $row) {
+        if (($row['name'] ?? '') === $column) { return; }
+    }
+    $pdo->exec('ALTER TABLE ' . $table . ' ADD COLUMN ' . $column . ' ' . $definition);
 }
 
 function seed_data(PDO $pdo): void {
@@ -202,6 +221,21 @@ function unique_slug(PDO $pdo, string $title, ?int $excludeId = null): string {
 function status_label(string $status): string { return t($status); }
 function doneness_options(): array { return ['rare'=>t('beef_rare'),'medium_rare'=>t('beef_medium_rare'),'medium'=>t('beef_medium'),'medium_well'=>t('beef_medium_well'),'well_done'=>t('beef_well_done')]; }
 function decode_options(string $json): array { $a = json_decode($json, true); return is_array($a) ? array_values(array_filter(array_map('strval', $a))) : []; }
+function normalize_guest_name(string $name): string { return strtolower(trim(preg_replace('/\s+/', ' ', $name) ?: $name)); }
+function find_or_create_guest_profile(PDO $pdo, string $name, string $pin): int {
+    $normalized = normalize_guest_name($name);
+    $stmt = $pdo->prepare('SELECT * FROM guest_profiles WHERE normalized_name = ? ORDER BY created_at ASC');
+    $stmt->execute([$normalized]);
+    foreach ($stmt->fetchAll() as $profile) {
+        if (password_verify($pin, (string)$profile['pin_hash'])) {
+            $pdo->prepare('UPDATE guest_profiles SET name=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')->execute([$name, $profile['id']]);
+            return (int)$profile['id'];
+        }
+    }
+    $hash = password_hash($pin, PASSWORD_DEFAULT);
+    $pdo->prepare('INSERT INTO guest_profiles(name,normalized_name,pin_hash) VALUES(?,?,?)')->execute([$name, $normalized, $hash]);
+    return (int)$pdo->lastInsertId();
+}
 
 function render_header(string $title = ''): void {
     $langs = available_langs();
@@ -231,11 +265,207 @@ function admin_tabs(): void {
     echo '</div>';
 }
 
+function render_sortable_script(): void {
+    echo '<script>
+function sortableOrder(listId){return Array.from(document.querySelectorAll("#"+listId+" [data-sort-id]")).map(function(el){return el.dataset.sortId;}).join(",");}
+function initSortable(listId,inputId){
+  const list=document.getElementById(listId); const input=document.getElementById(inputId); if(!list||!input){return;}
+  let dragged=null;
+  const update=function(){input.value=sortableOrder(listId);};
+  list.querySelectorAll("[data-sort-id]").forEach(function(row){
+    row.draggable=true;
+    row.addEventListener("dragstart",function(e){dragged=row; row.classList.add("dragging"); e.dataTransfer.effectAllowed="move";});
+    row.addEventListener("dragend",function(){row.classList.remove("dragging"); dragged=null; update();});
+  });
+  list.addEventListener("dragover",function(e){
+    e.preventDefault(); if(!dragged){return;}
+    const rows=Array.from(list.querySelectorAll("[data-sort-id]:not(.dragging)"));
+    let after=null;
+    for(const row of rows){const box=row.getBoundingClientRect(); if(e.clientY < box.top + box.height/2){after=row; break;}}
+    list.insertBefore(dragged, after);
+  });
+  list.addEventListener("drop",function(e){e.preventDefault(); update();});
+  update();
+}
+</script>';
+}
+
 function public_link(array $event): string {
     $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
     $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
     $path = strtok($_SERVER['REQUEST_URI'] ?? '/', '?');
     return $scheme . '://' . $host . $path . route('event', ['slug' => $event['slug']]);
+}
+
+function qr_svg(string $text, int $scale = 6, int $border = 4): string {
+    try {
+        $matrix = qr_matrix($text);
+    } catch (Throwable $e) {
+        return '<div class="notice warn">' . h(t('qr_too_long')) . '</div>';
+    }
+    $size = count($matrix);
+    $view = $size + ($border * 2);
+    $path = '';
+    for ($y = 0; $y < $size; $y++) {
+        for ($x = 0; $x < $size; $x++) {
+            if (!empty($matrix[$y][$x])) { $path .= 'M' . ($x + $border) . ',' . ($y + $border) . 'h1v1h-1z'; }
+        }
+    }
+    return '<svg class="qr-code" role="img" aria-label="QR code" width="' . ($view * $scale) . '" height="' . ($view * $scale) . '" viewBox="0 0 ' . $view . ' ' . $view . '" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" rx="2" fill="#fff"/><path fill="#111827" d="' . $path . '"/></svg>';
+}
+function qr_matrix(string $text): array {
+    $specs = [
+        1 => ['data'=>19, 'ec'=>7,  'blocks'=>[19]],
+        2 => ['data'=>34, 'ec'=>10, 'blocks'=>[34]],
+        3 => ['data'=>55, 'ec'=>15, 'blocks'=>[55]],
+        4 => ['data'=>80, 'ec'=>20, 'blocks'=>[80]],
+        5 => ['data'=>108,'ec'=>26, 'blocks'=>[108]],
+        6 => ['data'=>136,'ec'=>18, 'blocks'=>[68,68]],
+    ];
+    $len = strlen($text);
+    $version = 0; $spec = null;
+    foreach ($specs as $v => $candidate) {
+        if ((4 + 8 + ($len * 8)) <= ($candidate['data'] * 8)) { $version = $v; $spec = $candidate; break; }
+    }
+    if (!$spec) { throw new RuntimeException('QR text too long'); }
+    $bits = [];
+    qr_append_bits($bits, 0b0100, 4);
+    qr_append_bits($bits, $len, 8);
+    foreach (array_values(unpack('C*', $text) ?: []) as $b) { qr_append_bits($bits, (int)$b, 8); }
+    $capacityBits = $spec['data'] * 8;
+    qr_append_bits($bits, 0, min(4, $capacityBits - count($bits)));
+    while ((count($bits) % 8) !== 0) { $bits[] = 0; }
+    $data = [];
+    for ($i = 0; $i < count($bits); $i += 8) {
+        $b = 0;
+        for ($j = 0; $j < 8; $j++) { $b = ($b << 1) | ($bits[$i + $j] ?? 0); }
+        $data[] = $b;
+    }
+    for ($pad = 0; count($data) < $spec['data']; $pad++) { $data[] = ($pad % 2 === 0) ? 0xEC : 0x11; }
+
+    $dataBlocks = [];
+    $pos = 0;
+    foreach ($spec['blocks'] as $blockLen) { $dataBlocks[] = array_slice($data, $pos, $blockLen); $pos += $blockLen; }
+    $ecBlocks = [];
+    foreach ($dataBlocks as $block) { $ecBlocks[] = qr_rs_remainder($block, $spec['ec']); }
+    $codewords = [];
+    $maxData = max($spec['blocks']);
+    for ($i = 0; $i < $maxData; $i++) {
+        foreach ($dataBlocks as $block) { if ($i < count($block)) { $codewords[] = $block[$i]; } }
+    }
+    for ($i = 0; $i < $spec['ec']; $i++) {
+        foreach ($ecBlocks as $block) { $codewords[] = $block[$i]; }
+    }
+    $allBits = [];
+    foreach ($codewords as $cw) { qr_append_bits($allBits, $cw, 8); }
+
+    $size = 21 + (($version - 1) * 4);
+    $matrix = array_fill(0, $size, array_fill(0, $size, false));
+    $func = array_fill(0, $size, array_fill(0, $size, false));
+    qr_draw_function_patterns($matrix, $func, $version);
+    qr_draw_data($matrix, $func, $allBits);
+
+    $best = null; $bestPenalty = PHP_INT_MAX;
+    for ($mask = 0; $mask < 8; $mask++) {
+        $m = $matrix;
+        for ($y = 0; $y < $size; $y++) {
+            for ($x = 0; $x < $size; $x++) {
+                if (!$func[$y][$x] && qr_mask($mask, $x, $y)) { $m[$y][$x] = !$m[$y][$x]; }
+            }
+        }
+        qr_draw_format_bits($m, $func, $mask);
+        $penalty = qr_penalty($m);
+        if ($penalty < $bestPenalty) { $bestPenalty = $penalty; $best = $m; }
+    }
+    return $best ?: $matrix;
+}
+function qr_append_bits(array &$bits, int $value, int $length): void { for ($i = $length - 1; $i >= 0; $i--) { $bits[] = ($value >> $i) & 1; } }
+function qr_gf_tables(): array {
+    static $tables = null;
+    if ($tables !== null) { return $tables; }
+    $exp = array_fill(0, 512, 0); $log = array_fill(0, 256, 0); $x = 1;
+    for ($i = 0; $i < 255; $i++) { $exp[$i] = $x; $log[$x] = $i; $x <<= 1; if ($x & 0x100) { $x ^= 0x11D; } }
+    for ($i = 255; $i < 512; $i++) { $exp[$i] = $exp[$i - 255]; }
+    return $tables = [$exp, $log];
+}
+function qr_gf_mul(int $a, int $b): int { if ($a === 0 || $b === 0) { return 0; } [$exp, $log] = qr_gf_tables(); return $exp[$log[$a] + $log[$b]]; }
+function qr_rs_generator(int $degree): array {
+    $gen = [1]; [$exp] = qr_gf_tables();
+    for ($i = 0; $i < $degree; $i++) {
+        $next = array_fill(0, count($gen) + 1, 0);
+        foreach ($gen as $j => $coef) { $next[$j] ^= $coef; $next[$j + 1] ^= qr_gf_mul($coef, $exp[$i]); }
+        $gen = $next;
+    }
+    return $gen;
+}
+function qr_rs_remainder(array $data, int $ecLen): array {
+    $gen = qr_rs_generator($ecLen); $res = array_fill(0, $ecLen, 0);
+    foreach ($data as $b) {
+        $factor = $b ^ $res[0]; array_shift($res); $res[] = 0;
+        for ($i = 0; $i < $ecLen; $i++) { $res[$i] ^= qr_gf_mul($gen[$i + 1], $factor); }
+    }
+    return $res;
+}
+function qr_set(array &$m, array &$f, int $x, int $y, bool $dark): void { if (isset($m[$y][$x])) { $m[$y][$x] = $dark; $f[$y][$x] = true; } }
+function qr_draw_finder(array &$m, array &$f, int $x, int $y): void {
+    $size = count($m);
+    for ($dy = -1; $dy <= 7; $dy++) { for ($dx = -1; $dx <= 7; $dx++) {
+        $xx = $x + $dx; $yy = $y + $dy; if ($xx < 0 || $yy < 0 || $xx >= $size || $yy >= $size) { continue; }
+        $dark = ($dx >= 0 && $dx <= 6 && $dy >= 0 && $dy <= 6 && ($dx === 0 || $dx === 6 || $dy === 0 || $dy === 6 || ($dx >= 2 && $dx <= 4 && $dy >= 2 && $dy <= 4)));
+        qr_set($m, $f, $xx, $yy, $dark);
+    }}
+}
+function qr_draw_alignment(array &$m, array &$f, int $cx, int $cy): void { for ($dy = -2; $dy <= 2; $dy++) { for ($dx = -2; $dx <= 2; $dx++) { qr_set($m, $f, $cx + $dx, $cy + $dy, max(abs($dx), abs($dy)) === 2 || ($dx === 0 && $dy === 0)); } } }
+function qr_draw_function_patterns(array &$m, array &$f, int $version): void {
+    $size = count($m);
+    qr_draw_finder($m, $f, 0, 0); qr_draw_finder($m, $f, $size - 7, 0); qr_draw_finder($m, $f, 0, $size - 7);
+    for ($i = 0; $i < $size; $i++) { if (!$f[6][$i]) { qr_set($m, $f, $i, 6, $i % 2 === 0); } if (!$f[$i][6]) { qr_set($m, $f, 6, $i, $i % 2 === 0); } }
+    if ($version > 1) { qr_draw_alignment($m, $f, $size - 7, $size - 7); }
+    for ($i = 0; $i < 9; $i++) { if ($i !== 6) { qr_set($m, $f, 8, $i, false); qr_set($m, $f, $i, 8, false); } }
+    for ($i = 0; $i < 8; $i++) { qr_set($m, $f, $size - 1 - $i, 8, false); qr_set($m, $f, 8, $size - 1 - $i, false); }
+    qr_set($m, $f, 8, $size - 8, true);
+}
+function qr_draw_data(array &$m, array $f, array $bits): void {
+    $size = count($m); $i = 0; $up = true;
+    for ($right = $size - 1; $right >= 1; $right -= 2) {
+        if ($right === 6) { $right--; }
+        for ($vert = 0; $vert < $size; $vert++) {
+            $y = $up ? ($size - 1 - $vert) : $vert;
+            for ($dx = 0; $dx < 2; $dx++) { $x = $right - $dx; if (!$f[$y][$x]) { $m[$y][$x] = (($bits[$i++] ?? 0) === 1); } }
+        }
+        $up = !$up;
+    }
+}
+function qr_mask(int $mask, int $x, int $y): bool { return match ($mask) { 0 => (($x + $y) % 2) === 0, 1 => ($y % 2) === 0, 2 => ($x % 3) === 0, 3 => (($x + $y) % 3) === 0, 4 => ((intdiv($y, 2) + intdiv($x, 3)) % 2) === 0, 5 => ((($x * $y) % 2) + (($x * $y) % 3)) === 0, 6 => (((($x * $y) % 2) + (($x * $y) % 3)) % 2) === 0, default => (((($x + $y) % 2) + (($x * $y) % 3)) % 2) === 0, }; }
+function qr_draw_format_bits(array &$m, array &$f, int $mask): void {
+    $size = count($m); $data = (1 << 3) | $mask; $rem = $data << 10;
+    for ($i = 14; $i >= 10; $i--) { if ((($rem >> $i) & 1) !== 0) { $rem ^= 0x537 << ($i - 10); } }
+    $bits = (($data << 10) | ($rem & 0x3FF)) ^ 0x5412;
+    $get = fn(int $i): bool => (($bits >> $i) & 1) !== 0;
+    for ($i = 0; $i <= 5; $i++) { qr_set($m, $f, 8, $i, $get($i)); }
+    qr_set($m, $f, 8, 7, $get(6)); qr_set($m, $f, 8, 8, $get(7)); qr_set($m, $f, 7, 8, $get(8));
+    for ($i = 9; $i < 15; $i++) { qr_set($m, $f, 14 - $i, 8, $get($i)); }
+    for ($i = 0; $i < 8; $i++) { qr_set($m, $f, $size - 1 - $i, 8, $get($i)); }
+    for ($i = 8; $i < 15; $i++) { qr_set($m, $f, 8, $size - 15 + $i, $get($i)); }
+    qr_set($m, $f, 8, $size - 8, true);
+}
+function qr_penalty(array $m): int {
+    $size = count($m); $pen = 0;
+    for ($axis = 0; $axis < 2; $axis++) {
+        for ($i = 0; $i < $size; $i++) {
+            $runColor = false; $runLen = 0;
+            for ($j = 0; $j < $size; $j++) {
+                $color = $axis === 0 ? $m[$i][$j] : $m[$j][$i];
+                if ($j === 0 || $color !== $runColor) { if ($runLen >= 5) { $pen += 3 + ($runLen - 5); } $runColor = $color; $runLen = 1; }
+                else { $runLen++; }
+            }
+            if ($runLen >= 5) { $pen += 3 + ($runLen - 5); }
+        }
+    }
+    for ($y = 0; $y < $size - 1; $y++) { for ($x = 0; $x < $size - 1; $x++) { $c = $m[$y][$x]; if ($c === $m[$y][$x + 1] && $c === $m[$y + 1][$x] && $c === $m[$y + 1][$x + 1]) { $pen += 3; } } }
+    $dark = 0; foreach ($m as $row) { foreach ($row as $c) { if ($c) { $dark++; } } }
+    $percent = ($dark * 100) / ($size * $size); $pen += (int)(abs($percent - 50) / 5) * 10;
+    return $pen;
 }
 
 function page_home(): void {
@@ -370,7 +600,7 @@ function page_admin_event(): void {
     }
     $selectedStmt = $pdo->prepare('SELECT product_id FROM event_products WHERE event_id = ? AND active = 1'); $selectedStmt->execute([$id]); $selected = array_map('intval', array_column($selectedStmt->fetchAll(), 'product_id'));
     $products = $pdo->query('SELECT p.*, c.name AS category_name, c.icon AS category_icon FROM products p JOIN categories c ON c.id=p.category_id ORDER BY c.sort_order, p.sort_order, p.name')->fetchAll();
-    $guestStmt = $pdo->prepare('SELECT g.id, g.name, g.created_at, COUNT(DISTINCT o.id) AS order_count, COUNT(oi.id) AS item_count FROM guests g LEFT JOIN orders o ON o.guest_id=g.id LEFT JOIN order_items oi ON oi.order_id=o.id WHERE g.event_id=? GROUP BY g.id ORDER BY g.created_at DESC, g.name ASC');
+    $guestStmt = $pdo->prepare('SELECT g.id, g.name, g.created_at, CASE WHEN g.profile_id IS NULL THEN 0 ELSE 1 END AS has_pin, COUNT(DISTINCT o.id) AS order_count, COUNT(oi.id) AS item_count FROM guests g LEFT JOIN orders o ON o.guest_id=g.id LEFT JOIN order_items oi ON oi.order_id=o.id WHERE g.event_id=? GROUP BY g.id ORDER BY g.created_at DESC, g.name ASC');
     $guestStmt->execute([$id]);
     $guests = $guestStmt->fetchAll();
     render_header($event['title']);
@@ -381,7 +611,8 @@ function page_admin_event(): void {
         $checked = in_array((int)$p['id'], $selected, true) ? 'checked' : '';
         echo '<label class="check-chip"><input type="checkbox" name="product_ids[]" value="' . h($p['id']) . '" ' . $checked . '> ' . h($p['category_icon'] . ' ' . $p['name']) . ' <span class="muted">(' . h($p['category_name']) . ')</span></label>';
     }
-    echo '</div><br><input class="primary" type="submit" value="' . h(t('save')) . '"></form></div><div class="card"><h3>' . h(t('public_link')) . '</h3><p class="muted">' . h(t('public_hint')) . '</p><div class="copybox">' . h(public_link($event)) . '</div><br><div class="split-actions"><a class="btn primary" href="' . h(route('event', ['slug' => $event['slug']])) . '">' . h(t('join_event')) . '</a><a class="btn green" href="' . h(route('admin_kitchen', ['id' => $event['id']])) . '">' . h(t('kitchen')) . '</a></div></div></div>';
+    $link = public_link($event);
+    echo '</div><br><input class="primary" type="submit" value="' . h(t('save')) . '"></form></div><div class="card"><h3>' . h(t('public_link')) . '</h3><p class="muted">' . h(t('public_hint')) . '</p><div class="qr-wrap">' . qr_svg($link) . '</div><p class="muted">' . h(t('qr_url_hint')) . '</p><div class="copybox">' . h($link) . '</div><br><div class="split-actions"><a class="btn primary" href="' . h(route('event', ['slug' => $event['slug']])) . '">' . h(t('join_event')) . '</a><a class="btn green" href="' . h(route('admin_kitchen', ['id' => $event['id']])) . '">' . h(t('kitchen')) . '</a></div></div></div>';
 
     echo '<div class="section"><div class="card"><div class="section-title compact"><div><h3>' . h(t('guests')) . '</h3><p class="muted">' . h(t('guest_delete_hint')) . '</p></div><span class="pill public">' . h((string)count($guests)) . '</span></div>';
     if (!$guests) {
@@ -389,7 +620,7 @@ function page_admin_event(): void {
     } else {
         echo '<div class="table-wrap"><table><thead><tr><th>' . h(t('guest')) . '</th><th>' . h(t('joined_at')) . '</th><th>' . h(t('orders')) . '</th><th>' . h(t('actions')) . '</th></tr></thead><tbody>';
         foreach ($guests as $g) {
-            echo '<tr><td><strong>' . h($g['name']) . '</strong></td><td>' . h($g['created_at']) . '</td><td><strong>' . h((string)$g['order_count']) . '</strong><br><span class="muted">' . h(t('items')) . ': ' . h((string)$g['item_count']) . '</span></td><td><form class="inline-form" method="post" onsubmit="return confirm(\'' . h(t('confirm_delete_guest')) . '\')"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="delete_guest"><input type="hidden" name="guest_id" value="' . h($g['id']) . '"><button class="btn small red" type="submit">' . h(t('delete_guest')) . '</button></form></td></tr>';
+            echo '<tr><td><strong>' . h($g['name']) . '</strong>' . ((int)$g['has_pin'] ? '<br><span class="pill">PIN</span>' : '') . '</td><td>' . h($g['created_at']) . '</td><td><strong>' . h((string)$g['order_count']) . '</strong><br><span class="muted">' . h(t('items')) . ': ' . h((string)$g['item_count']) . '</span></td><td><form class="inline-form" method="post" onsubmit="return confirm(\'' . h(t('confirm_delete_guest')) . '\')"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="delete_guest"><input type="hidden" name="guest_id" value="' . h($g['id']) . '"><button class="btn small red" type="submit">' . h(t('delete_guest')) . '</button></form></td></tr>';
         }
         echo '</tbody></table></div>';
     }
@@ -404,6 +635,17 @@ function page_admin_categories(): void {
         verify_csrf();
         $action = (string)($_POST['action'] ?? 'save_category');
         $id = (int)($_POST['id'] ?? 0);
+
+        if ($action === 'sort_categories') {
+            $ids = array_filter(array_map('intval', explode(',', (string)($_POST['order'] ?? ''))));
+            $sort = 10;
+            foreach ($ids as $catId) {
+                $pdo->prepare('UPDATE categories SET sort_order=? WHERE id=?')->execute([$sort, $catId]);
+                $sort += 10;
+            }
+            flash(t('sort_saved'));
+            redirect_to('admin_categories');
+        }
 
         if ($action === 'delete_category' && $id > 0) {
             $stmt = $pdo->prepare('SELECT COUNT(*) FROM products WHERE category_id = ?');
@@ -420,21 +662,26 @@ function page_admin_categories(): void {
 
         $name = trim((string)($_POST['name'] ?? '')) ?: 'Kategorie';
         $icon = trim((string)($_POST['icon'] ?? '🔥')) ?: '🔥';
-        $sort = (int)($_POST['sort_order'] ?? 100);
-        if ($id > 0) { $pdo->prepare('UPDATE categories SET name=?, icon=?, sort_order=? WHERE id=?')->execute([$name, $icon, $sort, $id]); }
-        else { $pdo->prepare('INSERT INTO categories(name,icon,sort_order) VALUES(?,?,?)')->execute([$name, $icon, $sort]); }
+        if ($id > 0) {
+            $pdo->prepare('UPDATE categories SET name=?, icon=? WHERE id=?')->execute([$name, $icon, $id]);
+        } else {
+            $nextSort = ((int)$pdo->query('SELECT COALESCE(MAX(sort_order),0) + 10 FROM categories')->fetchColumn()) ?: 10;
+            $pdo->prepare('INSERT INTO categories(name,icon,sort_order) VALUES(?,?,?)')->execute([$name, $icon, $nextSort]);
+        }
         flash(t('category_saved'));
         redirect_to('admin_categories');
     }
     $categories = $pdo->query('SELECT * FROM categories ORDER BY sort_order, name')->fetchAll();
     render_header(t('categories'));
     echo '<section class="section"><div class="section-title"><h2>' . h(t('categories')) . '</h2></div>'; admin_tabs();
-    echo '<div class="card"><h3>' . h(t('add_category')) . '</h3><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="save_category"><div class="form-row"><div class="field"><label>' . h(t('category_name')) . '</label><input name="name" required></div><div class="field"><label>' . h(t('icon')) . '</label><input name="icon" value="🔥"></div></div><div class="field"><label>' . h(t('sort_order')) . '</label><input name="sort_order" type="number" value="100"></div><input class="primary" type="submit" value="' . h(t('add_category')) . '"></form></div>';
-    echo '<div class="section"><div class="table-wrap"><table><thead><tr><th>' . h(t('category')) . '</th><th>' . h(t('icon')) . '</th><th>' . h(t('sort_order')) . '</th><th>' . h(t('actions')) . '</th></tr></thead><tbody>';
+    echo '<div class="card"><h3>' . h(t('add_category')) . '</h3><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="save_category"><div class="form-row"><div class="field"><label>' . h(t('category_name')) . '</label><input name="name" required></div><div class="field"><label>' . h(t('icon')) . '</label><input name="icon" value="🔥"></div></div><input class="primary" type="submit" value="' . h(t('add_category')) . '"></form></div>';
+    echo '<div class="section"><div class="section-title compact"><div><h3>' . h(t('category_sorting')) . '</h3><p class="muted">' . h(t('drag_sort_hint')) . '</p></div><form method="post" onsubmit="document.getElementById(\'category-order\').value=sortableOrder(\'category-list\')"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="sort_categories"><input type="hidden" id="category-order" name="order"><button class="btn primary" type="submit">' . h(t('save_order')) . '</button></form></div><div class="table-wrap"><table><thead><tr><th></th><th>' . h(t('category')) . '</th><th>' . h(t('icon')) . '</th><th>' . h(t('actions')) . '</th></tr></thead><tbody id="category-list">';
     foreach ($categories as $c) {
-        echo '<tr><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="id" value="' . h($c['id']) . '"><td><input name="name" value="' . h($c['name']) . '"></td><td><input name="icon" value="' . h($c['icon']) . '"></td><td><input name="sort_order" type="number" value="' . h($c['sort_order']) . '"></td><td><div class="split-actions"><button class="btn small primary" name="action" value="save_category" type="submit">' . h(t('save')) . '</button><button class="btn small red" name="action" value="delete_category" type="submit" onclick="return confirm(\'' . h(t('confirm_delete_category')) . '\')">' . h(t('delete')) . '</button></div></td></form></tr>';
+        echo '<tr data-sort-id="' . h($c['id']) . '"><td class="drag-handle" title="' . h(t('drag_to_sort')) . '">☰</td><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="id" value="' . h($c['id']) . '"><td><input name="name" value="' . h($c['name']) . '"></td><td><input name="icon" value="' . h($c['icon']) . '"></td><td><div class="split-actions"><button class="btn small primary" name="action" value="save_category" type="submit">' . h(t('save')) . '</button><button class="btn small red" name="action" value="delete_category" type="submit" onclick="return confirm(\'' . h(t('confirm_delete_category')) . '\')">' . h(t('delete')) . '</button></div></td></form></tr>';
     }
     echo '</tbody></table></div></div></section>';
+    render_sortable_script();
+    echo '<script>initSortable("category-list","category-order");</script>';
     render_footer();
 }
 
@@ -445,6 +692,17 @@ function page_admin_products(): void {
         verify_csrf();
         $action = (string)($_POST['action'] ?? 'save_product');
         $id = (int)($_POST['id'] ?? 0);
+
+        if ($action === 'sort_products') {
+            $ids = array_filter(array_map('intval', explode(',', (string)($_POST['order'] ?? ''))));
+            $sort = 10;
+            foreach ($ids as $productId) {
+                $pdo->prepare('UPDATE products SET sort_order=? WHERE id=?')->execute([$sort, $productId]);
+                $sort += 10;
+            }
+            flash(t('sort_saved'));
+            redirect_to('admin_products');
+        }
 
         if ($action === 'delete_product' && $id > 0) {
             $stmt = $pdo->prepare('SELECT COUNT(*) FROM order_items oi JOIN event_products ep ON ep.id = oi.event_product_id WHERE ep.product_id = ?');
@@ -465,9 +723,14 @@ function page_admin_products(): void {
         $options = array_values(array_filter(array_map('trim', explode(',', (string)($_POST['options'] ?? '')))));
         $allowDoneness = isset($_POST['allow_doneness']) ? 1 : 0;
         $active = isset($_POST['active']) ? 1 : 0;
-        $sort = (int)($_POST['sort_order'] ?? 100);
-        if ($id > 0) { $pdo->prepare('UPDATE products SET category_id=?, name=?, description=?, options_json=?, allow_doneness=?, sort_order=?, active=? WHERE id=?')->execute([$categoryId, $name, $description, json_encode($options, JSON_UNESCAPED_UNICODE), $allowDoneness, $sort, $active, $id]); }
-        else { $pdo->prepare('INSERT INTO products(category_id,name,description,options_json,allow_doneness,sort_order,active) VALUES(?,?,?,?,?,?,?)')->execute([$categoryId, $name, $description, json_encode($options, JSON_UNESCAPED_UNICODE), $allowDoneness, $sort, $active]); }
+        if ($id > 0) {
+            $pdo->prepare('UPDATE products SET category_id=?, name=?, description=?, options_json=?, allow_doneness=?, active=? WHERE id=?')->execute([$categoryId, $name, $description, json_encode($options, JSON_UNESCAPED_UNICODE), $allowDoneness, $active, $id]);
+        } else {
+            $stmt = $pdo->prepare('SELECT COALESCE(MAX(sort_order),0) + 10 FROM products WHERE category_id=?');
+            $stmt->execute([$categoryId]);
+            $nextSort = ((int)$stmt->fetchColumn()) ?: 10;
+            $pdo->prepare('INSERT INTO products(category_id,name,description,options_json,allow_doneness,sort_order,active) VALUES(?,?,?,?,?,?,?)')->execute([$categoryId, $name, $description, json_encode($options, JSON_UNESCAPED_UNICODE), $allowDoneness, $nextSort, $active]);
+        }
         flash(t('product_saved'));
         redirect_to('admin_products');
     }
@@ -477,15 +740,17 @@ function page_admin_products(): void {
     echo '<section class="section"><div class="section-title"><h2>' . h(t('products')) . '</h2></div>'; admin_tabs();
     echo '<div class="card"><h3>' . h(t('add_product')) . '</h3><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="save_product"><div class="form-row"><div class="field"><label>' . h(t('product_name')) . '</label><input name="name" required></div><div class="field"><label>' . h(t('category')) . '</label><select name="category_id">';
     foreach ($categories as $c) { echo '<option value="' . h($c['id']) . '">' . h($c['icon'] . ' ' . $c['name']) . '</option>'; }
-    echo '</select></div></div><div class="field"><label>' . h(t('product_description')) . '</label><textarea name="description"></textarea></div><div class="field"><label>' . h(t('comma_options')) . '</label><input name="options" placeholder="Käse, Zwiebeln, Tomate"></div><div class="form-row"><label class="check-chip"><input type="checkbox" name="allow_doneness"> ' . h(t('allow_doneness')) . '</label><label class="check-chip"><input type="checkbox" name="active" checked> ' . h(t('active')) . '</label></div><div class="field"><label>' . h(t('sort_order')) . '</label><input name="sort_order" type="number" value="100"></div><input class="primary" type="submit" value="' . h(t('add_product')) . '"></form></div>';
+    echo '</select></div></div><div class="field"><label>' . h(t('product_description')) . '</label><textarea name="description"></textarea></div><div class="field"><label>' . h(t('comma_options')) . '</label><input name="options" placeholder="Käse, Zwiebeln, Tomate"></div><div class="form-row"><label class="check-chip"><input type="checkbox" name="allow_doneness"> ' . h(t('allow_doneness')) . '</label><label class="check-chip"><input type="checkbox" name="active" checked> ' . h(t('active')) . '</label></div><input class="primary" type="submit" value="' . h(t('add_product')) . '"></form></div>';
     echo '<div class="notice warn">' . h(t('delete_product_hint')) . '</div>';
-    echo '<div class="section"><div class="table-wrap"><table><thead><tr><th>' . h(t('product_name')) . '</th><th>' . h(t('category')) . '</th><th>' . h(t('options')) . '</th><th>' . h(t('status')) . '</th><th>' . h(t('actions')) . '</th></tr></thead><tbody>';
+    echo '<div class="section"><div class="section-title compact"><div><h3>' . h(t('product_sorting')) . '</h3><p class="muted">' . h(t('drag_sort_hint')) . '</p></div><form method="post" onsubmit="document.getElementById(\'product-order\').value=sortableOrder(\'product-list\')"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="sort_products"><input type="hidden" id="product-order" name="order"><button class="btn primary" type="submit">' . h(t('save_order')) . '</button></form></div><div class="table-wrap"><table><thead><tr><th></th><th>' . h(t('product_name')) . '</th><th>' . h(t('category')) . '</th><th>' . h(t('options')) . '</th><th>' . h(t('status')) . '</th><th>' . h(t('actions')) . '</th></tr></thead><tbody id="product-list">';
     foreach ($products as $p) {
-        echo '<tr><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="id" value="' . h($p['id']) . '"><td><input name="name" value="' . h($p['name']) . '"><textarea name="description">' . h($p['description']) . '</textarea><input name="sort_order" type="number" value="' . h($p['sort_order']) . '"></td><td><select name="category_id">';
+        echo '<tr data-sort-id="' . h($p['id']) . '"><td class="drag-handle" title="' . h(t('drag_to_sort')) . '">☰</td><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="id" value="' . h($p['id']) . '"><td><input name="name" value="' . h($p['name']) . '"><textarea name="description">' . h($p['description']) . '</textarea></td><td><select name="category_id">';
         foreach ($categories as $c) { echo '<option value="' . h($c['id']) . '" ' . ((int)$c['id']===(int)$p['category_id']?'selected':'') . '>' . h($c['icon'] . ' ' . $c['name']) . '</option>'; }
         echo '</select></td><td><input name="options" value="' . h(implode(', ', decode_options($p['options_json']))) . '"><br><label class="check-chip"><input type="checkbox" name="allow_doneness" ' . ((int)$p['allow_doneness'] ? 'checked' : '') . '> ' . h(t('allow_doneness')) . '</label></td><td><label class="check-chip"><input type="checkbox" name="active" ' . ((int)$p['active'] ? 'checked' : '') . '> ' . h(t('active')) . '</label></td><td><div class="split-actions"><button class="btn small primary" name="action" value="save_product" type="submit">' . h(t('save')) . '</button><button class="btn small red" name="action" value="delete_product" type="submit" onclick="return confirm(\'' . h(t('confirm_delete_product')) . '\')">' . h(t('delete')) . '</button></div></td></form></tr>';
     }
     echo '</tbody></table></div></div></section>';
+    render_sortable_script();
+    echo '<script>initSortable("product-list","product-order");</script>';
     render_footer();
 }
 
@@ -524,8 +789,25 @@ function page_event(): void {
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'join') {
         verify_csrf();
         $name = trim((string)($_POST['name'] ?? '')) ?: 'Gast';
+        $pin = trim((string)($_POST['pin'] ?? ''));
+        $profileId = null;
+        if ($pin !== '') {
+            if (!preg_match('/^\d{4}$/', $pin)) {
+                flash(t('invalid_pin'), 'bad');
+                redirect_to('event', ['slug' => $event['slug']]);
+            }
+            $profileId = find_or_create_guest_profile($pdo, $name, $pin);
+            $stmt = $pdo->prepare('SELECT token FROM guests WHERE event_id = ? AND profile_id = ? ORDER BY created_at DESC LIMIT 1');
+            $stmt->execute([$event['id'], $profileId]);
+            $existingToken = $stmt->fetchColumn();
+            if ($existingToken) {
+                $_SESSION[$tokenKey] = (string)$existingToken;
+                flash(t('guest_restored'));
+                redirect_to('event', ['slug' => $event['slug']]);
+            }
+        }
         $token = bin2hex(random_bytes(20));
-        $pdo->prepare('INSERT INTO guests(event_id,name,token) VALUES(?,?,?)')->execute([$event['id'], $name, $token]);
+        $pdo->prepare('INSERT INTO guests(event_id,profile_id,name,token) VALUES(?,?,?,?)')->execute([$event['id'], $profileId, $name, $token]);
         $_SESSION[$tokenKey] = $token;
         redirect_to('event', ['slug' => $event['slug']]);
     }
@@ -558,7 +840,7 @@ function page_event(): void {
     if ($event['description']) { echo '<div class="notice">' . nl2br(h($event['description'])) . '</div>'; }
     if ($event['status'] === 'closed') { echo '<div class="notice warn">' . h(t('closed_hint')) . '</div>'; }
     if (!$guest) {
-        echo '<div class="grid cols-2"><div class="card"><h3>' . h(t('join_event')) . '</h3><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="join"><div class="field"><label>' . h(t('guest_name')) . '</label><input name="name" required autofocus></div><input class="primary" type="submit" value="' . h(t('continue')) . '"></form></div><div class="hero-card"><img src="assets/hero-grill.svg" alt=""></div></div>';
+        echo '<div class="grid cols-2"><div class="card"><h3>' . h(t('join_event')) . '</h3><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="join"><div class="field"><label>' . h(t('guest_name')) . '</label><input name="name" required autofocus autocomplete="name"></div><div class="field"><label>' . h(t('guest_pin')) . '</label><input name="pin" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" placeholder="1234"><span class="muted">' . h(t('guest_pin_hint')) . '</span></div><input class="primary" type="submit" value="' . h(t('continue')) . '"></form></div><div class="hero-card"><img src="assets/hero-grill.svg" alt=""></div></div>';
     } else {
         echo '<div class="notice good">' . h(t('welcome_guest', ['name' => $guest['name']])) . '</div>';
         show_guest_status($event, $guest);

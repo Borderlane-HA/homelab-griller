@@ -111,5 +111,17 @@
   "delete_guest": "Gast löschen",
   "guest_deleted": "Gast gelöscht. Zugehörige Bestellungen wurden ebenfalls entfernt.",
   "confirm_delete_guest": "Diesen Gast wirklich löschen? Alle Bestellungen dieses Gasts werden ebenfalls entfernt.",
-  "guest_delete_hint": "Hier siehst du alle Gäste, die dem Event beigetreten sind. Beim Löschen werden auch ihre Bestellungen entfernt."
+  "guest_delete_hint": "Hier siehst du alle Gäste, die dem Event beigetreten sind. Beim Löschen werden auch ihre Bestellungen entfernt.",
+  "qr_url_hint": "Falls der QR-Code nicht klappt, kann diese URL auch manuell geöffnet oder kopiert werden.",
+  "qr_too_long": "Der öffentliche Link ist für den eingebauten QR-Code zu lang. Die URL darunter kann weiterhin genutzt werden.",
+  "category_sorting": "Kategorien sortieren",
+  "product_sorting": "Produkte sortieren",
+  "drag_sort_hint": "Ziehe die Zeilen am Griff in die gewünschte Reihenfolge und speichere danach die Sortierung.",
+  "save_order": "Sortierung speichern",
+  "sort_saved": "Sortierung gespeichert.",
+  "drag_to_sort": "Zum Sortieren ziehen",
+  "guest_pin": "4-stellige PIN (optional)",
+  "guest_pin_hint": "Mit Name + PIN kannst du später wieder demselben Gastprofil zugeordnet werden.",
+  "invalid_pin": "Die PIN muss aus genau 4 Ziffern bestehen.",
+  "guest_restored": "Willkommen zurück. Dein Gastprofil wurde wieder zugeordnet."
 }

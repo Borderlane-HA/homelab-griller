@@ -111,5 +111,17 @@
   "delete_guest": "Delete guest",
   "guest_deleted": "Guest deleted. Related orders were removed as well.",
   "confirm_delete_guest": "Really delete this guest? All orders from this guest will be removed as well.",
-  "guest_delete_hint": "This shows every guest who joined the event. Deleting a guest also removes their orders."
+  "guest_delete_hint": "This shows every guest who joined the event. Deleting a guest also removes their orders.",
+  "qr_url_hint": "If the QR code does not work, this URL can also be opened or copied manually.",
+  "qr_too_long": "The public link is too long for the built-in QR code. The URL below can still be used.",
+  "category_sorting": "Sort categories",
+  "product_sorting": "Sort products",
+  "drag_sort_hint": "Drag rows by the handle into the desired order, then save the order.",
+  "save_order": "Save order",
+  "sort_saved": "Order saved.",
+  "drag_to_sort": "Drag to sort",
+  "guest_pin": "4-digit PIN (optional)",
+  "guest_pin_hint": "With name + PIN, you can be assigned to the same guest profile again later.",
+  "invalid_pin": "The PIN must contain exactly 4 digits.",
+  "guest_restored": "Welcome back. Your guest profile was restored."
 }
