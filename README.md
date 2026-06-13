@@ -33,7 +33,7 @@ Recommended screenshot files:
 
 | Area | Suggested file |
 | --- | --- |
-| Public dashboard | `docs/screenshots/screen1.png` |
+| ![Dashboard](docs/screenshots/screen1.png)` |
 | Guest event page | `docs/screenshots/screen2.png` |
 | Admin dashboard | `docs/screenshots/screen3.png` |
 | Event editor | `docs/screenshots/screen4.png` |
