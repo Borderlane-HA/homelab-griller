@@ -33,12 +33,14 @@ Recommended screenshot files:
 
 | Area | Suggested file |
 | --- | --- |
-| Public dashboard | `docs/screenshots/public-dashboard.png` |
-| Guest event page | `docs/screenshots/guest-event.png` |
-| Admin dashboard | `docs/screenshots/admin-dashboard.png` |
-| Event editor | `docs/screenshots/event-editor.png` |
-| Grill-master todo board | `docs/screenshots/grillmaster-board.png` |
-| Mobile guest order view | `docs/screenshots/mobile-order.png` |
+| Public dashboard | `docs/screenshots/screen1.png` |
+| Guest event page | `docs/screenshots/screen2.png` |
+| Admin dashboard | `docs/screenshots/screen3.png` |
+| Event editor | `docs/screenshots/screen4.png` |
+| Grill-master todo board | `docs/screenshots/screen4.png` |
+| Mobile guest order view | `docs/screenshots/screen5.png` |
+| Mobile guest order view | `docs/screenshots/screen6.png` |
+| Mobile guest order view | `docs/screenshots/screen7.png` |
 
 Example Markdown after uploading your images:
 
