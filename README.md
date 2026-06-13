@@ -34,7 +34,7 @@ Recommended screenshot files:
 | Screenshot | Area |
 | --- | --- |
 | ![Admin](docs/screenshots/screen1.png)` | Admin |
-| ![Eat](docs/screenshots/screen2.png)` | Menu` |
+| ![Eat](docs/screenshots/screen2.png)` | Menu |
 | ![Guest](docs/screenshots/screen3.png)` | NewGuest |
 | ![Order](docs/screenshots/screen4.png)` | Guestorder |
 | ![Status](docs/screenshots/screen5.png)` | Meal status |
