@@ -4,7 +4,7 @@ services:
     container_name: homelab-griller
     restart: unless-stopped
     ports:
-      - "8088:80"
+      - "8091:80"
     environment:
       TZ: Europe/Berlin
       GRILLER_ADMIN_PASSWORD: ${GRILLER_ADMIN_PASSWORD:-change-me-now}
