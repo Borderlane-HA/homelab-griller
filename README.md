@@ -27,10 +27,6 @@ A clean, modern and self-hosted BBQ event planner for HomeLab setups. Create BBQ
 
 ## Screenshots
 
-Place your screenshots in `docs/screenshots/` and add them here.
-
-Recommended screenshot files:
-
 | Screenshot | Area |
 | --- | --- |
 | ![Admin](docs/screenshots/screen1.png)` | Admin |
