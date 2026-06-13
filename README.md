@@ -4,6 +4,17 @@ A clean, modern and self-hosted BBQ event planner for HomeLab setups. Create BBQ
 
 ![HomeLab Griller by Pengu](app/assets/logo.svg)
 
+## In short: What does this tool do?
+
+HomeLab Griller is a self-hosted BBQ event planner and order dashboard for private grill events, parties and HomeLab setups.
+
+As an admin, you can define what you bought for your BBQ event and create custom products such as a “PenguBurger”. For each product, you can add selectable options like cucumber, onions, tomato, cheese, toasted burger bun, BBQ sauce or garlic sauce.
+
+Guests can join the public event page, enter their name and build their own order exactly the way they want it. They can choose options, set quantities and add notes.
+
+As the grill master, you get a clean todo board with all guest orders. You can see who ordered what, prepare each item step by step and mark orders as in progress or finished. Guests can then see the status of their order directly on their own event page.
+
+
 ## Features
 
 - Self-hosted Docker container
