@@ -1,0 +1,12 @@
+services:
+  homelab-griller:
+    image: ghcr.io/borderlane-ha/homelab-griller:latest
+    container_name: homelab-griller
+    restart: unless-stopped
+    ports:
+      - "8091:80"
+    environment:
+      TZ: Europe/Berlin
+      GRILLER_DEFAULT_LANGUAGE: de
+    volumes:
+      - ./data:/var/www/html/data
