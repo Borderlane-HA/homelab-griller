@@ -8,6 +8,10 @@ Create a BBQ event, choose the available burgers, sides, drinks and ingredients,
 
 > **Private network recommended:** Host HomeLab Griller on a separate **guest network / VLAN** or a restricted local network. Allow guests access **only to the app**, not to Proxmox, Docker management or private HomeLab services. Guest Wi-Fi client isolation may require a firewall exception to reach the app. Complete the **initial admin setup immediately** on a trusted network. Do not expose the first-run setup page to the public Internet.
 
+## Admin interface
+
+After setup, the admin opens a live dashboard showing the active event, incoming orders, weather and stock alerts. On desktop use the sidebar; on mobile use the bottom navigation and **More**. Event creation and management now live under **Events**. The Grill Board remains a separate view. Existing orders and product data are unaffected.
+
 ## Docker — install
 
 ```bash
@@ -115,7 +119,7 @@ Open `https://SERVER-IP:8443` or use the domain covered by your certificate. The
 
 ## Releases
 
-Release tags such as `v2.0.0-beta.4` publish the Docker image and attach **FULL ZIP** and **UPDATE ZIP** for source installations. Docker/Proxmox users should update by pulling the container, **not** by replacing files inside it.
+Release tags such as `v2.0.0-beta.5` publish the Docker image and attach **FULL ZIP** and **UPDATE ZIP** for source installations. Docker/Proxmox users should update by pulling the container, **not** by replacing files inside it.
 
 **Upgrading from v1 / early v2:** back up the existing `data` directory and read [UPGRADE-v1-to-v2.md](UPGRADE-v1-to-v2.md). Do not delete your database. Test on a copy first.
 

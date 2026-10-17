@@ -338,51 +338,173 @@ function find_or_create_guest_profile(PDO $pdo, string $name, string $pin): int 
     return (int)$pdo->lastInsertId();
 }
 
+function admin_current_section(): string {
+    $r=(string)($_GET['r']??'admin');
+    return match($r){
+        'admin','admin_events','admin_event','admin_categories','admin_products','admin_ingredients',
+        'admin_guests','admin_inventory','admin_settings','admin_lang','admin_kitchen' => $r,
+        default=>'admin'
+    };
+}
+function admin_current_label(): string {
+    return match(admin_current_section()) {
+        'admin_events','admin_event' => t('events'),
+        'admin_kitchen' => t('kitchen'),
+        'admin_products' => t('nav_menus'),
+        'admin_categories' => t('categories'),
+        'admin_ingredients' => t('ingredients'),
+        'admin_inventory' => t('inventory_title'),
+        'admin_guests' => t('guests'),
+        'admin_lang' => t('language_packs'),
+        'admin_settings' => t('settings'),
+        default => t('nav_dashboard'),
+    };
+}
+function admin_layout_enabled(): bool {
+    return is_admin() && in_array((string)($_GET['r']??'home'),[
+        'admin','admin_events','admin_event','admin_categories','admin_products','admin_ingredients',
+        'admin_guests','admin_inventory','admin_settings','admin_lang','admin_kitchen'
+    ],true);
+}
+function admin_featured_event(): ?array {
+    static $event = false;
+    if ($event !== false) return $event;
+    $route=(string)($_GET['r']??'');
+    $id=(int)($_GET['id']??0);
+    if($id>0 && in_array($route,['admin_event','admin_inventory','admin_kitchen'],true)){
+        $existing=get_event($id);
+        if($existing){$event=$existing;return $event;}
+    }
+    $today=date('Y-m-d');
+    $q=db()->prepare("SELECT * FROM events WHERE status!='closed' ORDER BY CASE WHEN event_date=? THEN 0 WHEN event_date>=? THEN 1 ELSE 2 END, CASE WHEN event_date>=? THEN event_date END ASC, created_at DESC LIMIT 1");
+    $q->execute([$today,$today,$today]);
+    $event=$q->fetch()?:null;
+    return $event;
+}
+function admin_icon(string $id): string {
+    $paths=[
+        'dashboard'=>'<rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/>',
+        'calendar'=>'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/>',
+        'kitchen'=>'<path d="M6 3v7M9 3v7M3 3v7a3 3 0 0 0 6 0v11M17 21V3c4 3 4 9 0 12"/>',
+        'products'=>'<path d="M4 12h16M5 12V8a7 7 0 0 1 14 0v4M4 12l2 8h12l2-8"/>',
+        'categories'=>'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+        'ingredient'=>'<path d="M12 21c-6-3-9-8-7-13 2-5 8-4 10 0s1 10-3 13Z"/><path d="M12 21c3-6 3-12-2-16"/>',
+        'stock'=>'<path d="m12 2 9 5-9 5-9-5 9-5ZM3 7v10l9 5 9-5V7M12 12v10"/>',
+        'guests'=>'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/>',
+        'language'=>'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c-4 5-4 13 0 18M12 3c4 5 4 13 0 18"/>',
+        'settings'=>'<path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.5-2.4.8a7 7 0 0 0-1.7-1L14.4 3h-4.8L9.2 5.8a7 7 0 0 0-1.7 1L5.1 6l-2 3.5 2 1.5a7 7 0 0 0 0 2L3 14.5l2 3.5 2.5-.8a7 7 0 0 0 1.7 1l.4 2.8h4.8l.4-2.8a7 7 0 0 0 1.7-1l2.5.8 2-3.5-2-1.5a7 7 0 0 0 .1-1Z"/>',
+        'logout'=>'<path d="M10 17l5-5-5-5M15 12H3M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7"/>',
+        'external'=>'<path d="M14 3h7v7M21 3l-9 9M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6"/>',
+        'menu'=>'<path d="M4 6h16M4 12h16M4 18h16"/>',
+        'chevron'=>'<path d="m9 18 6-6-6-6"/>',
+        'plus'=>'<path d="M12 5v14M5 12h14"/>',
+        'alert'=>'<path d="m12 3 10 18H2L12 3ZM12 9v4M12 17h.01"/>',
+        'clock'=>'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'
+    ];
+    return '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'.($paths[$id]??$paths['dashboard']).'</svg>';
+}
+function admin_nav_items(): array {
+    $event=admin_featured_event();
+    $id=$event?(int)$event['id']:0;
+    return [
+        [t('nav_group_manage'),[
+            ['admin',t('nav_dashboard'),'dashboard',route('admin')],
+            ['admin_events',t('events'),'calendar',route('admin_events')],
+            ['admin_kitchen',t('kitchen'),'kitchen',$id?route('admin_kitchen',['id'=>$id]):route('admin_events')],
+            ['admin_guests',t('guests'),'guests',route('admin_guests')],
+        ]],
+        [t('nav_group_menu'),[
+            ['admin_products',t('nav_menus'),'products',route('admin_products')],
+            ['admin_categories',t('categories'),'categories',route('admin_categories')],
+            ['admin_ingredients',t('ingredients'),'ingredient',route('admin_ingredients')],
+            ['admin_inventory',t('inventory_title'),'stock',$id?route('admin_inventory',['id'=>$id]):route('admin_events')],
+        ]],
+        [t('nav_group_system'),[
+            ['admin_lang',t('language_packs'),'language',route('admin_lang')],
+            ['admin_settings',t('settings'),'settings',route('admin_settings')],
+        ]]
+    ];
+}
+function admin_navigation(string $suffix): void {
+    $current=admin_current_section();
+    foreach(admin_nav_items() as [$group,$items]){
+        echo '<div class="side-group"><span class="side-label">'.h($group).'</span>';
+        foreach($items as [$key,$label,$icon,$url]){
+            $active=$current===$key||($key==='admin_events'&&$current==='admin_event');
+            echo '<a class="side-link'.($active?' active':'').'" '.($active?'aria-current="page"':'').' href="'.h($url).'">'.admin_icon($icon).'<span>'.h($label).'</span>'.($active?'<span class="side-current"></span>':'').'</a>';
+        }
+        echo '</div>';
+    }
+}
+function admin_language_select():void {
+    $current=$_SESSION['lang']??setting('default_language',getenv('GRILLER_DEFAULT_LANGUAGE')?:'de');
+    echo '<form method="get" class="admin-language" aria-label="'.h(t('language')).'"><input type="hidden" name="r" value="'.h($_GET['r']??'admin').'">';
+    foreach($_GET as $k=>$v){if(!in_array($k,['r','lang'],true)&&is_scalar($v))echo '<input type="hidden" name="'.h($k).'" value="'.h($v).'">';}
+    echo '<label for="admin-language-select">'.h(t('language')).'</label><select id="admin-language-select" name="lang" onchange="this.form.submit()">';
+    foreach(available_langs() as $code=>$label){echo '<option value="'.h($code).'" '.($code===$current?'selected':'').'>'.h($label).'</option>';}
+    echo '</select></form>';
+}
+function admin_header_shell():void {
+    echo '<div class="admin-app-shell"><aside class="admin-sidebar" aria-label="'.h(t('nav_main')).'">';
+    echo '<a class="admin-brand" href="'.h(route('admin')).'"><span class="admin-brand-icon"><img src="assets/logo.svg" alt=""></span><span><strong>HomeLab Griller</strong><small>by Pengu · CONTROL CENTER</small></span></a>';
+    echo '<nav class="admin-side-scroll">';admin_navigation('desktop');echo '</nav>';
+    echo '<div class="admin-sidebar-footer"><div class="admin-profile"><span class="admin-avatar">G</span><span><strong>'.h(admin_username()).'</strong><small>'.h(t('admin')).'</small></span></div><a class="admin-signout" href="'.h(route('admin_logout')).'" aria-label="'.h(t('logout')).'">'.admin_icon('logout').'</a></div></aside>';
+    echo '<div class="admin-workspace"><div class="admin-topbar"><div class="admin-breadcrumb"><span>HomeLab Griller</span>'.admin_icon('chevron').'<strong>'.h(admin_current_label()).'</strong></div><div class="admin-top-actions">';
+    admin_language_select();
+    echo '<a class="admin-top-public" href="'.h(route('home')).'" title="'.h(t('nav_public_view')).'">'.admin_icon('external').'<span>'.h(t('nav_public_view')).'</span></a>';
+    echo '<button id="admin-menu-toggle" type="button" class="admin-menu-toggle" aria-expanded="false" aria-controls="admin-mobile-drawer" aria-label="'.h(t('nav_more')).'">'.admin_icon('menu').'</button></div></div>';
+    echo '<main class="admin-main container">';
+    echo '<div id="admin-mobile-overlay" class="admin-mobile-overlay" hidden></div><nav class="admin-mobile-bottom" aria-label="'.h(t('nav_main')).'">';
+    $featured=admin_featured_event();$id=$featured?(int)$featured['id']:0;
+    foreach([['admin',t('nav_dashboard'),'dashboard',route('admin')],['admin_events',t('events'),'calendar',route('admin_events')],['admin_kitchen',t('kitchen'),'kitchen',$id?route('admin_kitchen',['id'=>$id]):route('admin_events')],['admin_products',t('nav_menus'),'products',route('admin_products')]] as [$key,$label,$icon,$url]){
+        $active=admin_current_section()===$key||($key==='admin_events'&&admin_current_section()==='admin_event');
+        echo '<a class="mobile-tab'.($active?' active':'').'" href="'.h($url).'">'.admin_icon($icon).'<span>'.h($label).'</span></a>';
+    }
+    echo '<button type="button" class="mobile-tab" id="admin-mobile-more" aria-expanded="false" aria-controls="admin-mobile-drawer">'.admin_icon('menu').'<span>'.h(t('nav_more')).'</span></button></nav>';
+    echo '<aside class="admin-mobile-drawer" id="admin-mobile-drawer" aria-label="'.h(t('nav_main')).'" aria-hidden="true"><div class="mobile-drawer-head"><strong>'.h(t('nav_main')).'</strong><button type="button" class="btn ghost small" id="admin-mobile-close" aria-label="'.h(t('nav_close')).'">✕</button></div><nav>';admin_navigation('mobile');echo '</nav><a class="btn ghost" href="'.h(route('admin_logout')).'">'.admin_icon('logout').h(t('logout')).'</a></aside>';
+}
 function render_header(string $title = ''): void {
     $langs = available_langs();
     $current = $_SESSION['lang'] ?? setting('default_language',(getenv('GRILLER_DEFAULT_LANGUAGE') ?: 'de'));
+    $assetVersion = is_file(__DIR__ . '/VERSION') ? trim((string)file_get_contents(__DIR__ . '/VERSION')) : '2.0.0-beta.5';
+    $adminLayout=admin_layout_enabled();
     echo '<!doctype html><html lang="' . h($current) . '"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">';
     echo '<title>' . h($title ? $title . ' · ' . t('app_name') : t('app_name')) . '</title>';
-    echo '<meta name="theme-color" content="#14191d"><link rel="icon" href="assets/favicon.svg"><link rel="stylesheet" href="assets/style.css"></head><body class="theme-' . h(setting('theme','ember')) . '">';
-    echo '<header class="topbar"><div class="container topbar-inner"><a class="brand" href="' . h(route('home')) . '"><img src="assets/logo.svg" alt=""><span>' . h(t('app_name')) . ' <small class="muted">' . h(t('by_pengu')) . '</small></span></a><nav class="nav">';
-    echo '<form class="lang-select" method="get"><input type="hidden" name="r" value="' . h($_GET['r'] ?? 'home') . '">';
-    foreach ($_GET as $k => $v) { if (!in_array($k, ['r','lang'], true) && is_scalar($v)) { echo '<input type="hidden" name="' . h($k) . '" value="' . h($v) . '">'; } }
-    echo '<label class="muted" for="lang">' . h(t('language')) . '</label><select id="lang" name="lang" onchange="this.form.submit()">';
-    foreach ($langs as $code => $label) { echo '<option value="' . h($code) . '" ' . ($current === $code ? 'selected' : '') . '>' . h($label) . '</option>'; }
-    echo '</select></form>';
-    echo '<a class="btn ghost small home-link" href="' . h(route('home')) . '">' . h(t('home')) . '</a>';
-    if (is_admin()) { echo '<a class="btn dark small" href="' . h(route('admin')) . '">' . h(t('admin')) . '</a><a class="btn ghost small" href="' . h(route('admin_logout')) . '">' . h(t('logout')) . '</a>'; }
-    else { echo '<a class="btn dark small" href="' . h(route(is_admin()?'admin':'admin_login')) . '">' . h(t('admin')) . '</a>'; }
-    echo '</nav></div></header><main class="container">';
-    $f = flash(); if ($f) { echo '<div class="notice ' . h($f[1]) . '">' . h($f[0]) . '</div>'; }
+    echo '<meta name="theme-color" content="#14191d"><link rel="icon" href="assets/favicon.svg"><link rel="stylesheet" href="assets/style.css?v='.h(rawurlencode($assetVersion)).'"></head><body class="theme-' . h(setting('theme','ember')) . ($adminLayout?' admin-ui':'') . '">';
+    if($adminLayout)admin_header_shell();
+    else {
+        echo '<header class="topbar"><div class="container topbar-inner"><a class="brand" href="' . h(route('home')) . '"><img src="assets/logo.svg" alt=""><span>' . h(t('app_name')) . ' <small class="muted">' . h(t('by_pengu')) . '</small></span></a><nav class="nav">';
+        echo '<form class="lang-select" method="get"><input type="hidden" name="r" value="' . h($_GET['r'] ?? 'home') . '">';
+        foreach ($_GET as $k => $v) { if (!in_array($k, ['r','lang'], true) && is_scalar($v)) { echo '<input type="hidden" name="' . h($k) . '" value="' . h($v) . '">'; } }
+        echo '<label class="muted" for="lang">' . h(t('language')) . '</label><select id="lang" name="lang" onchange="this.form.submit()">';
+        foreach ($langs as $code => $label) { echo '<option value="' . h($code) . '" ' . ($current === $code ? 'selected' : '') . '>' . h($label) . '</option>'; }
+        echo '</select></form>';
+        echo '<a class="btn ghost small home-link" href="' . h(route('home')) . '">' . h(t('home')) . '</a>';
+        if (is_admin()) { echo '<a class="btn dark small" href="' . h(route('admin')) . '">' . h(t('admin')) . '</a><a class="btn ghost small" href="' . h(route('admin_logout')) . '">' . h(t('logout')) . '</a>'; }
+        else { echo '<a class="btn dark small" href="' . h(route('admin_login')) . '">' . h(t('admin')) . '</a>'; }
+        echo '</nav></div></header><main class="container">';
+    }
+    $f=flash();if($f)echo '<div class="notice ' . h($f[1]) . '">' . h($f[0]) . '</div>';
 }
 function render_footer(): void {
     $routeName=(string)($_GET['r']??'home');
     $section= $routeName==='home'?'home':($routeName==='event'?'guest':($routeName==='admin_kitchen'?'kitchen':'admin'));
     $allowed=explode(',',setting('footer_pages','home,guest,admin,kitchen'));
     echo '</main>';
+    if(admin_layout_enabled())echo '</div></div>'; // workspace and app-shell
     if(in_array($section,$allowed,true)){
         $txt=setting('footer_text',t('footer'));
-        echo '<footer class="footer"><div class="container">' . nl2br(h($txt));
+        echo '<footer class="footer'.(admin_layout_enabled()?' admin-footer':'') .'"><div class="container">' . nl2br(h($txt));
         if(setting('footer_show_version','0')==='1'){
-            $version=is_file(__DIR__.'/VERSION')?trim((string)file_get_contents(__DIR__.'/VERSION')):'2.0.0-beta.3';
+            $version=is_file(__DIR__.'/VERSION')?trim((string)file_get_contents(__DIR__.'/VERSION')):'2.0.0-beta.5';
             echo ' <span class="footer-version">v' . h($version) . '</span>';
         }
         echo '</div></footer>';
     }
-    $assetVersion = is_file(__DIR__ . '/VERSION') ? trim((string)file_get_contents(__DIR__ . '/VERSION')) : '2.0.0-beta.3';
+    $assetVersion = is_file(__DIR__ . '/VERSION') ? trim((string)file_get_contents(__DIR__ . '/VERSION')) : '2.0.0-beta.5';
     echo '<script defer src="assets/app.js?v=' . h(rawurlencode($assetVersion)) . '"></script></body></html>';
 }
-function admin_tabs(): void {
-    echo '<div class="admin-tabs">';
-    echo '<a class="btn ghost small" href="' . h(route('admin')) . '">' . h(t('events')) . '</a>';
-    echo '<a class="btn ghost small" href="' . h(route('admin_categories')) . '">' . h(t('categories')) . '</a>';
-    echo '<a class="btn ghost small" href="' . h(route('admin_products')) . '">' . h(t('products')) . '</a>';
-    echo '<a class="btn ghost small" href="' . h(route('admin_guests')) . '">' . h(t('guests')) . '</a>';
-    echo '<a class="btn ghost small" href="' . h(route('admin_ingredients')) . '">' . h(t('ingredients')) . '</a>';
-    echo '<a class="btn ghost small" href="' . h(route('admin_settings')) . '">' . h(t('settings')) . '</a>';
-    echo '<a class="btn ghost small" href="' . h(route('admin_lang')) . '">' . h(t('language_packs')) . '</a>';
-    echo '</div>';
+function admin_tabs(): void { // The shared sidebar replaces the old button rows.
 }
 
 function render_sortable_script(): void {
@@ -799,7 +921,100 @@ function render_today_events(array $events): void {
     echo '</div></div>';
 }
 
+function page_admin_overview_api():void {
+    require_admin();
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: private, no-store');
+    $pdo=db();$event=admin_featured_event();$id=$event?(int)$event['id']:0;
+    $stats=['guests'=>0,'pending'=>0,'in_progress'=>0,'done'=>0];$recent=[];$alerts=[];
+    if($id){
+        $q=$pdo->prepare("SELECT
+            (SELECT COUNT(*) FROM guests WHERE event_id=?) guests,
+            (SELECT COUNT(*) FROM order_items oi JOIN orders o ON o.id=oi.order_id WHERE o.event_id=? AND oi.status='pending') pending,
+            (SELECT COUNT(*) FROM order_items oi JOIN orders o ON o.id=oi.order_id WHERE o.event_id=? AND oi.status='in_progress') in_progress,
+            (SELECT COUNT(*) FROM order_items oi JOIN orders o ON o.id=oi.order_id WHERE o.event_id=? AND oi.status='done') done");
+        $q->execute([$id,$id,$id,$id]);$stats=$q->fetch()?:$stats;
+        $q=$pdo->prepare('SELECT o.id AS order_id,oi.quantity,oi.status,g.name guest_name,p.name product_name,c.icon category_icon FROM order_items oi JOIN orders o ON o.id=oi.order_id JOIN guests g ON g.id=o.guest_id JOIN event_products ep ON ep.id=oi.event_product_id JOIN products p ON p.id=ep.product_id JOIN categories c ON c.id=p.category_id WHERE o.event_id=? ORDER BY oi.created_at DESC,oi.id DESC LIMIT 7');
+        $q->execute([$id]);$recent=$q->fetchAll();
+        if((int)$event['inventory_enabled']===1){
+            $snap=inventory_snapshot($id);
+            if($snap['enabled'] && $snap['limits']){
+                $names=[];foreach($pdo->query('SELECT id,name FROM ingredients') as $r)$names[(int)$r['id']]=$r['name'];
+                foreach($snap['remaining'] as $iid=>$remaining){$limit=$snap['limits'][$iid]??0;if($remaining<=max(2,(int)floor($limit*.15)))$alerts[]=['name'=>$names[$iid]??t('ingredients'),'remaining'=>max(0,(int)$remaining)];}
+                usort($alerts,static fn($a,$b)=>$a['remaining']<=>$b['remaining']);$alerts=array_slice($alerts,0,4);
+            }
+        }
+    }
+    $labels=[];foreach(['pending','in_progress','done','cancelled'] as $status)$labels[$status]=t($status);
+    echo json_encode(['event_id'=>$id,'stats'=>$stats,'recent'=>$recent,'alerts'=>$alerts,'status_labels'=>$labels,'no_orders'=>t('nav_no_orders'),'stock_ok'=>t('nav_stock_ok'),'remaining_label'=>t('inventory_remaining')],JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR);
+}
+
 function page_admin(): void {
+    require_admin();
+    // Keep old event-form POST URLs working during an upgrade.
+    if ($_SERVER['REQUEST_METHOD']==='POST' && in_array((string)($_POST['action']??''),['create_event','clone_event','delete_event'],true)) {
+        page_admin_events(); return;
+    }
+    $pdo=db();
+    $event=admin_featured_event();
+    $eventId=$event?(int)$event['id']:0;
+    $stats=['guests'=>0,'pending'=>0,'in_progress'=>0,'done'=>0];
+    $recent=[];$alerts=[];
+    if($eventId){
+        $stmt=$pdo->prepare("SELECT
+            (SELECT COUNT(*) FROM guests WHERE event_id=?) guests,
+            (SELECT COUNT(*) FROM order_items oi JOIN orders o ON o.id=oi.order_id WHERE o.event_id=? AND oi.status='pending') pending,
+            (SELECT COUNT(*) FROM order_items oi JOIN orders o ON o.id=oi.order_id WHERE o.event_id=? AND oi.status='in_progress') in_progress,
+            (SELECT COUNT(*) FROM order_items oi JOIN orders o ON o.id=oi.order_id WHERE o.event_id=? AND oi.status='done') done");
+        $stmt->execute([$eventId,$eventId,$eventId,$eventId]);$stats=$stmt->fetch()?:$stats;
+        $stmt=$pdo->prepare('SELECT o.id AS order_id,oi.quantity,oi.status,oi.created_at,g.name guest_name,p.name product_name,c.icon category_icon FROM order_items oi JOIN orders o ON o.id=oi.order_id JOIN guests g ON g.id=o.guest_id JOIN event_products ep ON ep.id=oi.event_product_id JOIN products p ON p.id=ep.product_id JOIN categories c ON c.id=p.category_id WHERE o.event_id=? ORDER BY oi.created_at DESC, oi.id DESC LIMIT 7');
+        $stmt->execute([$eventId]);$recent=$stmt->fetchAll();
+        if((int)$event['inventory_enabled']===1){
+            $snap=inventory_snapshot($eventId);
+            if($snap['enabled']){
+                $ingredientIds=array_keys($snap['limits']);
+                if($ingredientIds){
+                    $stmt=$pdo->query('SELECT id,name FROM ingredients');
+                    $names=[];foreach($stmt as $row)$names[(int)$row['id']]=$row['name'];
+                    foreach($snap['remaining'] as $iid=>$remaining){
+                        $limit=$snap['limits'][$iid]??0;
+                        if($remaining<=max(2,(int)floor($limit*.15))) $alerts[]=['name'=>$names[$iid]??t('ingredients'),'remaining'=>$remaining];
+                    }
+                    usort($alerts,static fn($a,$b)=>$a['remaining']<=>$b['remaining']);$alerts=array_slice($alerts,0,4);
+                }
+            }
+        }
+    }
+    render_header(t('nav_dashboard'));
+    echo '<section id="admin-dashboard-live" data-live-url="'.h(route('admin_overview_api')).'" data-event-id="'.h($eventId).'" class="section admin-dashboard"><div class="admin-dashboard-heading"><div><span class="eyebrow">GRILL MASTER CONTROL CENTER</span><h1>'.h(t('nav_welcome')).'</h1><p class="muted">'.h(t('nav_dashboard_intro')).'</p></div><a class="btn primary" href="'.h(route('admin_events')).'#new-event">'.admin_icon('plus').h(t('new_event')).'</a></div>';
+    if($event){
+        $liveLabel=($event['status']==='public')?t('public'):t($event['status']);
+        echo '<div class="admin-featured-event"><div class="featured-info"><span class="eyebrow">'.h(t('nav_active_event')).'</span><div class="featured-title-row"><h2>'.h($event['title']).'</h2><span class="pill '.h($event['status']).'">'.h($liveLabel).'</span></div><p>'.admin_icon('calendar').h($event['event_date']?:t('nav_no_date')).' · '.h($stats['guests']).' '.h(t('guests')).'</p></div><div class="featured-actions"><a class="btn primary" href="'.h(route('admin_kitchen',['id'=>$eventId])).'">'.admin_icon('kitchen').h(t('nav_open_board')).'</a><a class="btn ghost" href="'.h(route('admin_event',['id'=>$eventId])).'">'.h(t('edit')).'</a></div></div>';
+    }else echo '<div class="card admin-first-event"><div>'.admin_icon('calendar').'<h2>'.h(t('nav_no_events')).'</h2><p class="muted">'.h(t('nav_no_events_hint')).'</p></div><a class="btn primary" href="'.h(route('admin_events')).'#new-event">'.h(t('new_event')).'</a></div>';
+    echo '<div class="admin-metric-grid">';
+    foreach(['pending'=>['clock',t('pending')],'in_progress'=>['kitchen',t('in_progress')],'done'=>['dashboard',t('done')],'guests'=>['guests',t('guests')]] as $status=>$data){
+        echo '<a href="'.h($eventId?route('admin_kitchen',['id'=>$eventId]):route('admin_events')).'" class="admin-metric metric-'.h($status).'"><span class="admin-metric-top">'.admin_icon($data[0]).'<span>'.h($data[1]).'</span></span><strong data-admin-stat="'.h($status).'">'.h($stats[$status]).'</strong><span class="admin-metric-bottom">'.h(t('nav_current_event')).' →</span></a>';
+    }
+    echo '</div><div class="admin-dashboard-grid"><div class="admin-dashboard-primary">';
+    echo '<section class="card admin-dashboard-card"><div class="admin-card-heading"><div><span class="eyebrow">LIVE FEED</span><h3>'.h(t('nav_recent_orders')).'</h3></div><a class="btn small ghost" href="'.h($eventId?route('admin_kitchen',['id'=>$eventId]):route('admin_events')).'">'.h(t('nav_view_all')).' →</a></div>';
+    echo '<div id="admin-live-orders">';
+    if(!$recent)echo '<div class="admin-empty-state">'.admin_icon('clock').'<p>'.h(t('nav_no_orders')).'</p></div>';
+    else foreach($recent as $row){echo '<div class="admin-order-row"><span class="admin-order-icon">'.h($row['category_icon']).'</span><div class="admin-order-detail"><strong>#'.h($row['order_id']).' · '.h($row['guest_name']).'</strong><span>'.h($row['quantity']).'× '.h($row['product_name']).'</span></div><span class="pill '.h($row['status']).'">'.h(t($row['status'])).'</span></div>';}
+    echo '</div></section>';
+    echo '<section class="card admin-dashboard-card admin-quick-section"><div class="admin-card-heading"><h3>'.h(t('nav_quick_actions')).'</h3></div><div class="admin-quick-grid">';
+    foreach([['calendar',t('events'),route('admin_events')],['products',t('nav_menus'),route('admin_products')],['stock',t('inventory_title'),$eventId?route('admin_inventory',['id'=>$eventId]):route('admin_events')],['guests',t('guests'),route('admin_guests')]] as [$icon,$label,$url])echo '<a class="admin-quick-link" href="'.h($url).'">'.admin_icon($icon).'<span>'.h($label).'</span>'.admin_icon('chevron').'</a>';
+    echo '</div></section></div><div class="admin-dashboard-secondary">';
+    echo '<section class="card admin-dashboard-card admin-weather-card"><div class="admin-card-heading"><div><span class="eyebrow">OUTDOOR CONDITIONS</span><h3>'.h(t('weather_widget')).'</h3></div><a href="'.h(route('admin_settings')).'" class="admin-small-gear" title="'.h(t('settings')).'">'.admin_icon('settings').'</a></div>';page_weather_widget();echo '</section>';
+    echo '<section class="card admin-dashboard-card"><div class="admin-card-heading"><h3>'.h(t('nav_stock_alerts')).'</h3><span id="admin-stock-alert-count" class="pill '.($alerts?'cancelled':'public').'">'.count($alerts).'</span></div><div id="admin-live-alerts">';
+    if(!$alerts)echo '<div class="admin-empty-state compact">'.admin_icon('stock').'<p>'.h(t('nav_stock_ok')).'</p></div>';
+    else foreach($alerts as $item){echo '<div class="admin-alert-row">'.admin_icon('alert').'<span>'.h($item['name']).'</span><strong>'.h(max(0,(int)$item['remaining'])).' '.h(t('inventory_remaining')).'</strong></div>';}
+    echo '</div>';
+    if($eventId)echo '<a class="admin-card-footer-link" href="'.h(route('admin_inventory',['id'=>$eventId])).'">'.h(t('inventory_title')).' →</a>';
+    echo '</section></div></div></section>';
+    render_footer();
+}
+
+function page_admin_events(): void {
     require_admin();
     $pdo = db();
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create_event') {
@@ -845,12 +1060,14 @@ function page_admin(): void {
             $pdo->prepare('DELETE FROM events WHERE id = ?')->execute([$id]);
             flash(t('event_deleted'));
         }
-        redirect_to('admin');
+        redirect_to('admin_events');
     }
     $events = $pdo->query('SELECT e.*, COUNT(DISTINCT g.id) AS guest_count, COUNT(oi.id) AS item_count FROM events e LEFT JOIN guests g ON g.event_id=e.id LEFT JOIN orders o ON o.guest_id=g.id LEFT JOIN order_items oi ON oi.order_id=o.id GROUP BY e.id ORDER BY CASE WHEN e.event_date=date(\'now\',\'localtime\') THEN 0 ELSE 1 END, CASE WHEN e.event_date>=date(\'now\',\'localtime\') THEN 0 ELSE 1 END, e.event_date DESC,e.created_at DESC')->fetchAll();
-    render_header(t('admin_dashboard'));
-    $dashboardStats=$pdo->query("SELECT (SELECT COUNT(*) FROM guests) AS guests, (SELECT COUNT(*) FROM order_items WHERE status='pending') AS pending, (SELECT COUNT(*) FROM order_items WHERE status='in_progress') AS in_progress, (SELECT COUNT(*) FROM order_items WHERE status='done') AS done")->fetch();
-    echo '<section class="section"><div class="section-title"><h2>' . h(t('admin_dashboard')) . '</h2></div>'; admin_tabs(); echo '<div class="queue-stats admin-kpis">';foreach(['guests'=>t('guests'),'pending'=>t('pending'),'in_progress'=>t('in_progress'),'done'=>t('done')] as $key=>$label){echo '<div class="queue-stat ' . h($key) . '"><span>' . h($label) . '</span><strong>' . h($dashboardStats[$key]) . '</strong></div>';}echo '</div>'; page_weather_widget();render_today_events($events); echo '<div class="grid cols-2"><div class="card"><h3>' . h(t('new_event')) . '</h3><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="create_event"><div class="field"><label>' . h(t('title')) . '</label><input name="title" required placeholder="Sommer BBQ"></div><div class="field"><label>' . h(t('event_date')) . '</label><input name="event_date" type="date" value="' . h(date('Y-m-d')) . '"></div><div class="field"><label>' . h(t('description')) . '</label><textarea name="description" placeholder="Hinweise für Gäste"></textarea></div><input class="primary" type="submit" value="' . h(t('create')) . '"></form></div><div class="card"><h3>' . h(t('events')) . '</h3><p class="muted">' . h(t('public_hint')) . '</p><p class="muted">' . h(t('guests_hint')) . '</p></div></div>';
+    render_header(t('events'));
+    echo '<section class="section admin-events-page"><div class="section-title"><div><span class="eyebrow">'.h(t('nav_group_manage')).'</span><h1>'.h(t('events')).'</h1><p class="muted">'.h(t('nav_events_intro')).'</p></div><a href="'.h(route('admin')).'" class="btn ghost small">← '.h(t('nav_dashboard')).'</a></div>';
+    render_today_events($events);
+    echo '<div class="grid cols-2 admin-event-create-grid"><div id="new-event" class="card"><h3>'.h(t('new_event')).'</h3><form method="post"><input type="hidden" name="csrf" value="'.h(csrf_token()).'"><input type="hidden" name="action" value="create_event"><div class="field"><label>'.h(t('title')).'</label><input name="title" required placeholder="Sommer BBQ"></div><div class="field"><label>'.h(t('event_date')).'</label><input name="event_date" type="date" value="'.h(date('Y-m-d')).'"></div><div class="field"><label>'.h(t('description')).'</label><textarea name="description" placeholder="'.h(t('nav_event_hint')).'"></textarea></div><button class="primary" type="submit">'.admin_icon('plus').' '.h(t('create')).'</button></form></div><div class="card admin-event-howto"><span class="eyebrow">'.h(t('nav_event_quickstart')).'</span><h3>'.h(t('nav_event_manage_title')).'</h3><p class="muted">'.h(t('nav_event_manage_text')).'</p><div class="admin-event-steps"><span>01 · '.h(t('new_event')).'</span><span>02 · '.h(t('nav_menus')).'</span><span>03 · '.h(t('kitchen')).'</span></div></div></div>';
+    echo '<div class="section-title admin-table-heading"><h2>'.h(t('nav_all_events')).'</h2><span class="pill">'.count($events).'</span></div>';
     echo '<div class="section"><div class="table-wrap"><table><thead><tr><th>' . h(t('title')) . '</th><th>' . h(t('event_date')) . '</th><th>' . h(t('status')) . '</th><th>' . h(t('guests')) . '</th><th>' . h(t('actions')) . '</th></tr></thead><tbody>';
     foreach ($events as $e) {
         echo '<tr><td><a class="event-name-link" href="' . h(route('admin_kitchen',['id'=>$e['id']])) . '">' . h($e['title']) . ' →</a><br><span class="muted">/' . h($e['slug']) . '</span></td><td>' . h($e['event_date'] ?: '-') . weather_day_badge($e['event_date']) . '</td><td><span class="pill ' . h($e['status']) . '">' . h(status_label($e['status'])) . '</span></td><td><strong>' . h((string)$e['guest_count']) . '</strong><br><span class="muted">' . h(t('orders')) . ': ' . h((string)$e['item_count']) . '</span></td><td class="nowrap"><div class="split-actions"><a class="btn small primary" href="' . h(route('admin_event', ['id' => $e['id']])) . '">' . h(t('edit')) . '</a><a class="btn small green" href="' . h(route('admin_kitchen', ['id' => $e['id']])) . '">' . h(t('kitchen')) . '</a><a class="btn small ghost" href="' . h(route('admin_inventory',['id'=>$e['id']])) . '">📦 ' . h(t('inventory_title')) . '</a><form class="inline-form" method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="clone_event"><input type="hidden" name="id" value="' . h($e['id']) . '"><button class="btn small ghost" type="submit">' . h(t('clone')) . '</button></form><form class="inline-form" method="post" onsubmit="return confirm(\'' . h(t('confirm_delete_event')) . '\')"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="delete_event"><input type="hidden" name="id" value="' . h($e['id']) . '"><button class="btn small red" type="submit">' . h(t('delete')) . '</button></form></div></td></tr>';
@@ -899,7 +1116,7 @@ function page_admin_event(): void {
     $guestStmt->execute([$id]);
     $guests = $guestStmt->fetchAll();
     render_header($event['title']);
-    echo '<section class="section"><div class="section-title"><h2>' . h($event['title']) . '</h2><a class="btn ghost" href="' . h(route('admin')) . '">' . h(t('back')) . '</a></div>'; admin_tabs();
+    echo '<section class="section"><div class="section-title"><h2>' . h($event['title']) . '</h2><a class="btn ghost" href="' . h(route('admin_events')) . '">' . h(t('back')) . '</a></div>'; admin_tabs();
     $event = get_event($id);
     echo '<div class="event-admin-tools"><a class="btn primary" href="'.h(route('admin_inventory',['id'=>$id])).'">📦 '.h(t('inventory_title')).'</a><a class="btn ghost" href="'.h(route('admin_kitchen',['id'=>$id])).'">🔥 '.h(t('kitchen')).'</a></div>';
     echo '<div class="grid cols-2"><div class="card"><h3>' . h(t('edit')) . '</h3><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="save_event"><div class="field"><label>' . h(t('title')) . '</label><input name="title" value="' . h($event['title']) . '" required></div><div class="form-row"><div class="field"><label>' . h(t('event_date')) . '</label><input name="event_date" type="date" value="' . h($event['event_date']) . '"></div><div class="field"><label>' . h(t('status')) . '</label><select name="status"><option value="draft" ' . ($event['status']==='draft'?'selected':'') . '>' . h(t('draft')) . '</option><option value="public" ' . ($event['status']==='public'?'selected':'') . '>' . h(t('public')) . '</option><option value="closed" ' . ($event['status']==='closed'?'selected':'') . '>' . h(t('closed')) . '</option></select></div></div><div class="field"><label>' . h(t('description')) . '</label><textarea name="description">' . h($event['description']) . '</textarea></div><h3>' . h(t('event_products')) . '</h3><div class="grid">';
@@ -1584,6 +1801,8 @@ try {
         'admin_login' => page_admin_login(),
         'admin_logout' => page_admin_logout(),
         'admin' => page_admin(),
+        'admin_overview_api' => page_admin_overview_api(),
+        'admin_events' => page_admin_events(),
         'admin_event' => page_admin_event(),
         'admin_categories' => page_admin_categories(),
         'admin_products' => page_admin_products(),

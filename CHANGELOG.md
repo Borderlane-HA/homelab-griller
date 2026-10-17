@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.0.0-beta.5
+
+- Desktop sidebar and mobile bottom navigation with an accessible More drawer.
+- New live dashboard with featured event, event-scoped KPIs, recent orders, weather and stock alerts (15-second AJAX refresh without page reload).
+- Events management moved into a dedicated view with mobile-friendly event cards.
+- Navigation links for Grill Board, menus, ingredients, stock, guests, language packs and settings.
+- Guest ordering, inventory transactions, database schema and theme selection unchanged.
+- Updated admin integration smoke checks.
+
+
 ## 2.0.0-beta.4
 
 - Public event cards redesigned with a dedicated weather panel, date, and clearer mobile join action.

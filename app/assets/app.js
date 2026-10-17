@@ -3,6 +3,91 @@
   'use strict';
   const $ = id => document.getElementById(id);
   const el = (tag, cls, value) => { const n = document.createElement(tag); if (cls) n.className = cls; if (value != null) n.textContent = value; return n; };
+  // Mobile admin navigation: shared links work without JS; drawer is an enhancement.
+  const mobileDrawer = $('admin-mobile-drawer');
+  if (mobileDrawer) {
+    const overlay = $('admin-mobile-overlay');
+    const toggles = [$('admin-menu-toggle'), $('admin-mobile-more')].filter(Boolean);
+    const closeButton = $('admin-mobile-close');
+    const setOpen = (open) => {
+      mobileDrawer.classList.toggle('open', open);
+      mobileDrawer.setAttribute('aria-hidden', String(!open));
+      overlay.hidden = !open;
+      toggles.forEach(button => button.setAttribute('aria-expanded', String(open)));
+      document.body.classList.toggle('admin-drawer-open', open);
+      if (open) closeButton?.focus();
+    };
+    toggles.forEach(button => button.addEventListener('click', () => setOpen(!mobileDrawer.classList.contains('open'))));
+    closeButton?.addEventListener('click', () => setOpen(false));
+    overlay?.addEventListener('click', () => setOpen(false));
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && mobileDrawer.classList.contains('open')) setOpen(false); });
+    mobileDrawer.querySelectorAll('a').forEach(link => link.addEventListener('click', () => setOpen(false)));
+  }
+  // Event-scoped admin dashboard updates without reloading the page or losing scroll position.
+  const dashboardLive = $('admin-dashboard-live');
+  if (dashboardLive) {
+    let lastFingerprint = '';
+    const pollOverview = async () => {
+      if (document.visibilityState === 'hidden') return;
+      try {
+        const response = await fetch(dashboardLive.dataset.liveUrl, {credentials: 'same-origin', cache: 'no-store'});
+        if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) return;
+        const data = await response.json();
+        if (String(data.event_id) !== dashboardLive.dataset.eventId) { location.reload(); return; }
+        const fingerprint = JSON.stringify([data.stats, data.recent, data.alerts]);
+        if (fingerprint === lastFingerprint) return;
+        lastFingerprint = fingerprint;
+        dashboardLive.querySelectorAll('[data-admin-stat]').forEach(node => {
+          node.textContent = String(data.stats?.[node.dataset.adminStat] ?? 0);
+        });
+        const orders = $('admin-live-orders');
+        if (orders) {
+          const fragment = document.createDocumentFragment();
+          if (!data.recent?.length) {
+            const empty = el('div', 'admin-empty-state');
+            empty.append(el('p', '', data.no_orders || 'No orders yet'));
+            fragment.append(empty);
+          } else {
+            data.recent.forEach(order => {
+              const row = el('div', 'admin-order-row');
+              row.append(el('span', 'admin-order-icon', order.category_icon || '🍽️'));
+              const detail = el('div', 'admin-order-detail');
+              detail.append(el('strong', '', '#' + order.order_id + ' · ' + order.guest_name));
+              detail.append(el('span', '', order.quantity + '× ' + order.product_name));
+              row.append(detail);
+              const status = String(order.status || 'pending');
+              row.append(el('span', 'pill ' + (['pending','in_progress','done','cancelled'].includes(status) ? status : 'pending'), data.status_labels?.[status] || status));
+              fragment.append(row);
+            });
+          }
+          orders.replaceChildren(fragment);
+        }
+        const alerts = $('admin-live-alerts'), alertCounter = $('admin-stock-alert-count');
+        if (alertCounter) {
+          alertCounter.textContent = String(data.alerts?.length || 0);
+          alertCounter.className = 'pill ' + (data.alerts?.length ? 'cancelled' : 'public');
+        }
+        if (alerts) {
+          const fragment = document.createDocumentFragment();
+          if (!data.alerts?.length) {
+            const empty = el('div', 'admin-empty-state compact');
+            empty.append(el('p', '', data.stock_ok || 'Stock is looking good.'));
+            fragment.append(empty);
+          } else {
+            data.alerts.forEach(alert => {
+              const row = el('div', 'admin-alert-row');
+              row.append(el('span', '', '⚠'));
+              row.append(el('span', '', alert.name));
+              row.append(el('strong', '', alert.remaining + ' ' + data.remaining_label));
+              fragment.append(row);
+            });
+          }
+          alerts.replaceChildren(fragment);
+        }
+      } catch (_) { /* Retry on the next interval without interrupting the admin. */ }
+    };
+    setInterval(pollOverview, 15000);
+  }
   const form = $('guest-order-form');
   if (form) {
     const wizard = $('order-wizard');

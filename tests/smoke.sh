@@ -28,14 +28,33 @@ curl -sS -b "$DIR/cookies" -c "$DIR/cookies" -o /dev/null \
   --data-urlencode "password=Test123" --data-urlencode "password_confirm=Test123" \
   --data-urlencode 'theme=ember' "$BASE/?r=setup"
 curl -fsS -b "$DIR/cookies" "$BASE/?r=admin" -o "$DIR/admin.html"
-grep -q 'New BBQ event' "$DIR/admin.html" || { echo 'Admin setup failed'; tail -25 "$DIR/admin.html"; exit 1; }
+grep -q 'admin-sidebar' "$DIR/admin.html" || { echo 'Admin sidebar missing'; exit 1; }
+grep -q 'admin-mobile-bottom' "$DIR/admin.html" || { echo 'Admin mobile navigation missing'; exit 1; }
+grep -q 'Welcome back' "$DIR/admin.html" || { echo 'Dashboard missing'; exit 1; }
+curl -fsS -b "$DIR/cookies" "$BASE/?r=admin_events" -o "$DIR/events.html"
+grep -q 'New BBQ event' "$DIR/events.html" || { echo 'Events page missing'; exit 1; }
 csrf="$(grep -oE 'name="csrf" value="[a-f0-9]+"' "$DIR/admin.html" | head -1 | cut -d '"' -f4)"
 curl -sS -b "$DIR/cookies" -c "$DIR/cookies" -o /dev/null \
   --data-urlencode "csrf=$csrf" --data-urlencode 'action=create_event' --data-urlencode 'title=Smoke BBQ' \
-  --data-urlencode 'event_date=2026-10-17' "$BASE/?r=admin"
-curl -fsS -b "$DIR/cookies" "$BASE/?r=admin" -o "$DIR/admin.html"
-grep -q 'Smoke BBQ' "$DIR/admin.html" || { echo 'Event creation failed'; exit 1; }
-grep -q 'class="pill public"' "$DIR/admin.html" || { echo 'Expected public default for event'; exit 1; }
+  --data-urlencode 'event_date=2026-10-17' "$BASE/?r=admin_events"
+curl -fsS -b "$DIR/cookies" "$BASE/?r=admin_events" -o "$DIR/events.html"
+grep -q 'Smoke BBQ' "$DIR/events.html" || { echo 'Event creation failed'; exit 1; }
+grep -q 'class="pill public"' "$DIR/events.html" || { echo 'Expected public default for event'; exit 1; }
+curl -fsS -b "$DIR/cookies" "$BASE/?r=admin" -o "$DIR/dashboard.html"
+grep -q 'Smoke BBQ' "$DIR/dashboard.html" || { echo 'Dashboard featured event missing'; exit 1; }
+curl -fsS -b "$DIR/cookies" "$BASE/?r=admin_overview_api" -o "$DIR/overview.json"
+python3 - "$DIR/overview.json" <<'PYADMIN'
+import json,sys
+payload=json.load(open(sys.argv[1]))
+assert payload['event_id']==1,payload
+assert 'pending' in payload['stats'],payload
+assert 'recent' in payload and 'alerts' in payload,payload
+PYADMIN
+for page in admin_categories admin_products admin_ingredients admin_guests admin_lang admin_settings; do
+  curl -fsS -b "$DIR/cookies" "$BASE/?r=$page" -o "$DIR/${page}.html"
+  grep -q 'admin-sidebar' "$DIR/${page}.html" || { echo "Admin menu missing on $page"; exit 1; }
+done
+
 [[ "$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/data/tls/server.key")" == 403 ]] || { echo 'Private key exposed!' >&2; exit 1; }
 # Enable inventory for the first product and cap it at one serving.
 curl -fsS -b "$DIR/cookies" "$BASE/?r=admin_inventory&id=1" -o "$DIR/inventory.html"
