@@ -92,8 +92,11 @@ for page in admin_categories admin_products admin_ingredients admin_guests admin
 done
 
 # Verify preset and custom themes apply via AJAX and persist across fresh HTTP requests.
-settings_csrf="$(grep -m1 -oE 'name="csrf" value="[a-f0-9]+"' "$DIR/admin_settings.html" | cut -d '"' -f4 || true)"
-[[ -n "$settings_csrf" ]] || { echo 'Missing settings CSRF token'; exit 1; }
+# The settings page contains many forms on one HTML line. `grep -m1 -o`
+# returns *all* matching CSRF fields from that line, separated by newlines.
+# Read the single token used by the actual theme studio instead.
+settings_csrf="$(grep -oE 'data-csrf="[a-f0-9]{32}"' "$DIR/admin_settings.html" | sed -n '1s/^data-csrf="//;1s/"$//;1p' || true)"
+[[ "$settings_csrf" =~ ^[a-f0-9]{32}$ ]] || { echo 'Missing or invalid theme studio CSRF token'; exit 1; }
 grep -q 'data-theme-select="kids"' "$DIR/admin_settings.html" || { echo 'Theme gallery missing'; exit 1; }
 for selected in garden midnight nordic smoke kids ember; do
   curl -fsS -b "$DIR/cookies" --data-urlencode "csrf=$settings_csrf" --data-urlencode "theme=$selected" \
@@ -103,7 +106,7 @@ import json,sys
 r=json.load(open(sys.argv[1]));assert r.get('ok') and r.get('theme')==sys.argv[2],r
 PYTHEME
   http_get -fsS -b "$DIR/cookies" "$BASE/?r=admin_settings" -o "$DIR/theme-view.html"
-  grep -q "class="theme-$selected admin-ui"" "$DIR/theme-view.html" || { echo "Theme $selected not persisted"; exit 1; }
+  grep -Fq "class=\"theme-${selected} admin-ui\"" "$DIR/theme-view.html" || { echo "Theme $selected not persisted"; exit 1; }
 done
 curl -fsS -b "$DIR/cookies" --data-urlencode "csrf=$settings_csrf" --data-urlencode 'theme=custom' \
   --data-urlencode 'accent=#325dc7' --data-urlencode 'mode=light' --data-urlencode 'cards=outlined' \
