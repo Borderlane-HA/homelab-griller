@@ -65,7 +65,10 @@ grep -q 'admin-mobile-bottom' "$DIR/admin.html" || { echo 'Admin mobile navigati
 grep -q 'Welcome back' "$DIR/admin.html" || { echo 'Dashboard missing'; exit 1; }
 http_get -fsS -b "$DIR/cookies" "$BASE/?r=admin_events" -o "$DIR/events.html"
 grep -q 'New BBQ event' "$DIR/events.html" || { echo 'Events page missing'; exit 1; }
-csrf="$(grep -oE 'name="csrf" value="[a-f0-9]+"' "$DIR/admin.html" | head -1 | cut -d '"' -f4)"
+# The beta.5 dashboard is read-only and has no CSRF field. The create-event
+# form lives on the separate admin_events page, so read its CSRF token there.
+csrf="$(grep -m1 -oE 'name="csrf" value="[a-f0-9]+"' "$DIR/events.html" | cut -d '"' -f4 || true)"
+[[ -n "$csrf" ]] || { echo 'Missing CSRF token in event creation form' >&2; exit 1; }
 curl -sS -b "$DIR/cookies" -c "$DIR/cookies" -o /dev/null \
   --data-urlencode "csrf=$csrf" --data-urlencode 'action=create_event' --data-urlencode 'title=Smoke BBQ' \
   --data-urlencode 'event_date=2026-10-17' "$BASE/?r=admin_events"
