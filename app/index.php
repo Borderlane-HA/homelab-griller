@@ -114,6 +114,33 @@ function init_db(PDO $pdo): void {
         FOREIGN KEY(event_product_id) REFERENCES event_products(id) ON DELETE CASCADE
     )");
 
+    ensure_column($pdo, 'events', 'inventory_enabled', 'INTEGER NOT NULL DEFAULT 0');
+    ensure_column($pdo, 'event_products', 'stock_limit', 'INTEGER');
+    ensure_column($pdo, 'order_items', 'stock_recorded', 'INTEGER NOT NULL DEFAULT 0');
+    $pdo->exec("CREATE TABLE IF NOT EXISTS order_item_components (
+        item_id INTEGER NOT NULL,
+        ingredient_id INTEGER NOT NULL,
+        units_used INTEGER NOT NULL CHECK(units_used >= 0),
+        PRIMARY KEY(item_id,ingredient_id),
+        FOREIGN KEY(item_id) REFERENCES order_items(id) ON DELETE CASCADE,
+        FOREIGN KEY(ingredient_id) REFERENCES ingredients(id) ON DELETE CASCADE
+    )");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS product_recipes (
+        product_id INTEGER NOT NULL,
+        ingredient_id INTEGER NOT NULL,
+        units_per_item INTEGER NOT NULL DEFAULT 1 CHECK(units_per_item > 0),
+        PRIMARY KEY(product_id,ingredient_id),
+        FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE,
+        FOREIGN KEY(ingredient_id) REFERENCES ingredients(id) ON DELETE CASCADE
+    )");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS event_inventory (
+        event_id INTEGER NOT NULL,
+        ingredient_id INTEGER NOT NULL,
+        stock_quantity INTEGER NOT NULL CHECK(stock_quantity >= 0),
+        PRIMARY KEY(event_id,ingredient_id),
+        FOREIGN KEY(event_id) REFERENCES events(id) ON DELETE CASCADE,
+        FOREIGN KEY(ingredient_id) REFERENCES ingredients(id) ON DELETE CASCADE
+    )");
     $pdo->exec("CREATE TABLE IF NOT EXISTS app_settings (setting_key TEXT PRIMARY KEY, setting_value TEXT NOT NULL)");
     $pdo->exec("CREATE TABLE IF NOT EXISTS ingredients (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE COLLATE NOCASE, group_name TEXT NOT NULL DEFAULT 'Extras', active INTEGER NOT NULL DEFAULT 1)");
     $pdo->exec("CREATE TABLE IF NOT EXISTS product_ingredients (product_id INTEGER NOT NULL, ingredient_id INTEGER NOT NULL, PRIMARY KEY(product_id,ingredient_id), FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE, FOREIGN KEY(ingredient_id) REFERENCES ingredients(id) ON DELETE CASCADE)");
@@ -574,6 +601,128 @@ function qr_penalty(array $m): int {
     return $pen;
 }
 
+/** Inventory is event-scoped. NULL/missing stock limits are unlimited.
+ * Usage is derived from non-cancelled order lines; never decrement counters manually.
+ * Caller must hold SQLite BEGIN IMMEDIATE when verifying a new order.
+ */
+function inventory_snapshot(int $eventId,int $excludeOrderId=0): array {
+    $pdo=db();
+    $q=$pdo->prepare('SELECT inventory_enabled FROM events WHERE id=?');$q->execute([$eventId]);
+    $enabled=(bool)$q->fetchColumn();
+    $snap=['enabled'=>$enabled,'limits'=>[],'used'=>[],'remaining'=>[], 'recipe'=>[], 'options'=>[], 'product_limits'=>[], 'product_used'=>[]];
+    if(!$enabled)return $snap;
+    $q=$pdo->prepare('SELECT ingredient_id,stock_quantity FROM event_inventory WHERE event_id=?');$q->execute([$eventId]);
+    foreach($q as $r){$snap['limits'][(int)$r['ingredient_id']]=(int)$r['stock_quantity'];}
+    foreach($pdo->query('SELECT product_id,ingredient_id,units_per_item FROM product_recipes') as $r){
+        $snap['recipe'][(int)$r['product_id']][(int)$r['ingredient_id']]=(int)$r['units_per_item'];
+    }
+    foreach($pdo->query('SELECT pi.product_id,i.id,i.name FROM product_ingredients pi JOIN ingredients i ON i.id=pi.ingredient_id') as $r){
+        $snap['options'][(int)$r['product_id']][(string)$r['name']]=(int)$r['id'];
+    }
+    $q=$pdo->prepare('SELECT id,stock_limit FROM event_products WHERE event_id=?');$q->execute([$eventId]);
+    foreach($q as $r){if($r['stock_limit']!==null)$snap['product_limits'][(int)$r['id']]=(int)$r['stock_limit'];}
+    $q=$pdo->prepare("SELECT oi.id AS item_id,oi.stock_recorded,oi.event_product_id,ep.product_id,oi.quantity,oi.options_json FROM order_items oi JOIN orders o ON o.id=oi.order_id JOIN event_products ep ON ep.id=oi.event_product_id WHERE o.event_id=? AND oi.status != 'cancelled' AND o.id != ?");
+    $q->execute([$eventId,$excludeOrderId]);
+    $ledger=$pdo->prepare("SELECT c.item_id,c.ingredient_id,c.units_used FROM order_item_components c JOIN order_items oi ON oi.id=c.item_id JOIN orders o ON o.id=oi.order_id WHERE o.event_id=? AND oi.status!='cancelled' AND o.id!=?");
+    $ledger->execute([$eventId,$excludeOrderId]);$recorded=[];
+    foreach($ledger as $entry){$recorded[(int)$entry['item_id']][(int)$entry['ingredient_id']]=(int)$entry['units_used'];}
+    foreach($q as $r){
+        $qty=(int)$r['quantity'];$pid=(int)$r['product_id'];$ep=(int)$r['event_product_id'];
+        if((int)$r['stock_recorded']===1){
+            $snap['product_used'][$ep]=($snap['product_used'][$ep]??0)+$qty;
+            foreach($recorded[(int)$r['item_id']]??[] as $iid=>$units){$snap['used'][$iid]=($snap['used'][$iid]??0)+$units;}
+            continue;
+        }
+        $snap['product_used'][$ep]=($snap['product_used'][$ep]??0)+$qty;
+        foreach($snap['recipe'][$pid]??[] as $iid=>$units){$snap['used'][$iid]=($snap['used'][$iid]??0)+$qty*$units;}
+        foreach(array_unique(decode_options((string)$r['options_json'])) as $name){
+            $iid=$snap['options'][$pid][$name]??null;
+            if($iid!==null){$snap['used'][$iid]=($snap['used'][$iid]??0)+$qty;}
+        }
+    }
+    foreach($snap['limits'] as $iid=>$limit){$snap['remaining'][$iid]=$limit-($snap['used'][$iid]??0);}
+    return $snap;
+}
+function inventory_product_remaining(array $snap,int $epId,int $productId): ?int {
+    if(!$snap['enabled'])return null;
+    $available=isset($snap['product_limits'][$epId]) ? $snap['product_limits'][$epId]-($snap['product_used'][$epId]??0) : null;
+    foreach($snap['recipe'][$productId]??[] as $iid=>$units){
+        if(!array_key_exists($iid,$snap['limits']))continue;
+        $component=(int)floor(($snap['remaining'][$iid]??0)/$units);
+        $available=$available===null?$component:min($available,$component);
+    }
+    return $available===null?null:max(0,$available);
+}
+function inventory_option_remaining(array $snap,int $productId,string $option): ?int {
+    if(!$snap['enabled'])return null;
+    $iid=$snap['options'][$productId][$option]??null;
+    if($iid===null||!array_key_exists($iid,$snap['limits']))return null;
+    return max(0,$snap['remaining'][$iid]??0);
+}
+function inventory_check_order(array $snap,array $chosen,array $allowed): ?string {
+    if(!$snap['enabled'])return null;
+    $required=[];$prodRequired=[];
+    foreach($chosen as $row){
+        [$ep,$qty,$doneness,$options]=$row;
+        $pid=(int)$allowed[$ep]['id'];
+        $prodRequired[$ep]=($prodRequired[$ep]??0)+$qty;
+        foreach($snap['recipe'][$pid]??[] as $iid=>$units){$required[$iid]=($required[$iid]??0)+$qty*$units;}
+        foreach(array_unique($options) as $opt){
+            $iid=$snap['options'][$pid][$opt]??null;
+            if($iid!==null){$required[$iid]=($required[$iid]??0)+$qty;}
+        }
+    }
+    foreach($prodRequired as $ep=>$qty){
+        if(isset($snap['product_limits'][$ep]) && $qty>($snap['product_limits'][$ep]-($snap['product_used'][$ep]??0)))
+            return (string)$allowed[$ep]['name'];
+    }
+    foreach($required as $iid=>$amount){
+        if(array_key_exists($iid,$snap['limits']) && $amount>($snap['remaining'][$iid]??0)){
+            $q=db()->prepare('SELECT name FROM ingredients WHERE id=?');$q->execute([$iid]);return (string)($q->fetchColumn()?:'Ingredient');
+        }
+    }
+    return null;
+}
+function inventory_row_inputs(string $kind,int $id,?int $value): string {
+    return '<input class="inventory-quantity" type="number" inputmode="numeric" min="0" max="100000" name="'.$kind.'['.$id.']" value="'.h($value===null?'':$value).'" placeholder="∞" aria-label="'.h(t('inventory_stock')).'">';
+}
+function page_admin_inventory(): void {
+    require_admin();$pdo=db();$eventId=(int)($_GET['id']??0);$event=get_event($eventId);if(!$event)redirect_to('admin');
+    if($_SERVER['REQUEST_METHOD']==='POST'){
+        verify_csrf();$enabled=isset($_POST['inventory_enabled'])?1:0;
+        $ingredientInput=is_array($_POST['ingredient_stock']??null)?$_POST['ingredient_stock']:[];
+        $productInput=is_array($_POST['product_stock']??null)?$_POST['product_stock']:[];
+        $validate=function($values){$result=[];foreach($values as $id=>$val){$id=(int)$id;$str=trim((string)$val);if($id<=0)continue;
+            if($str===''){$result[$id]=null;continue;}
+            if(!preg_match('/^\d{1,6}$/',$str)|| (int)$str>100000)throw new InvalidArgumentException(t('stock_invalid'));
+            $result[$id]=(int)$str;
+        }return $result;};
+        try{$ingredientInput=$validate($ingredientInput);$productInput=$validate($productInput);}catch(InvalidArgumentException $e){flash($e->getMessage(),'bad');redirect_to('admin_inventory',['id'=>$eventId]);}
+        $pdo->beginTransaction();
+        try{
+            $pdo->prepare('UPDATE events SET inventory_enabled=?,updated_at=CURRENT_TIMESTAMP WHERE id=?')->execute([$enabled,$eventId]);
+            $pdo->prepare('DELETE FROM event_inventory WHERE event_id=?')->execute([$eventId]);
+            foreach($ingredientInput as $iid=>$stock){if($stock!==null)$pdo->prepare('INSERT INTO event_inventory(event_id,ingredient_id,stock_quantity) SELECT ?,id,? FROM ingredients WHERE id=?')->execute([$eventId,$stock,$iid]);}
+            foreach($productInput as $ep=>$stock){$pdo->prepare('UPDATE event_products SET stock_limit=? WHERE id=? AND event_id=?')->execute([$stock,$ep,$eventId]);}
+            $pdo->commit();flash(t('inventory_saved'));
+        }catch(Throwable $e){$pdo->rollBack();throw $e;}
+        redirect_to('admin_inventory',['id'=>$eventId]);
+    }
+    $snap=inventory_snapshot($eventId);
+    $ingredients=$pdo->query('SELECT * FROM ingredients ORDER BY group_name,name')->fetchAll();
+    $stmt=$pdo->prepare('SELECT ep.id,p.name,p.id AS product_id,ep.stock_limit FROM event_products ep JOIN products p ON p.id=ep.product_id WHERE ep.event_id=? ORDER BY p.name');$stmt->execute([$eventId]);$products=$stmt->fetchAll();
+    render_header(t('inventory_title'));
+    echo '<section class="section"><div class="section-title"><div><span class="eyebrow">BBQ STOCK CONTROL</span><h1>'.h(t('inventory_title')).'</h1><p class="muted">'.h($event['title']).'</p></div><a class="btn ghost" href="'.h(route('admin_event',['id'=>$eventId])).'">← '.h(t('back')).'</a></div>';admin_tabs();
+    echo '<form method="post"><input type="hidden" name="csrf" value="'.h(csrf_token()).'"><div class="card inventory-toggle"><div><h2>'.h(t('inventory_enable')).'</h2><p class="muted">'.h(t('inventory_hint')).'</p></div><label class="inventory-switch"><input type="checkbox" name="inventory_enabled" '.($snap['enabled']?'checked':'').'> '.h(t('active')).'</label></div>';
+    echo '<div class="grid cols-2 inventory-admin-grid"><div class="card"><h3>'.h(t('inventory_ingredients')).'</h3><p class="muted">'.h(t('inventory_blank')).'</p><div class="inventory-list">';
+    foreach($ingredients as $ing){$iid=(int)$ing['id'];$limit=$snap['limits'][$iid]??null;$used=$snap['used'][$iid]??0;$remaining=$limit===null?null:$limit-$used;
+        echo '<label class="inventory-editor-row"><span><strong>'.h($ing['name']).'</strong><small>'.h($ing['group_name']).' · '.h(t('inventory_used')).': '.$used.($remaining===null?'':' · '.h(t('inventory_remaining')).': '.$remaining).'</small></span>'.inventory_row_inputs('ingredient_stock',$iid,$limit).'</label>';}
+    echo '</div></div><div class="card"><h3>'.h(t('inventory_products')).'</h3><p class="muted">'.h(t('inventory_product_hint')).'</p><div class="inventory-list">';
+    foreach($products as $prod){$ep=(int)$prod['id'];$cap=$snap['product_limits'][$ep]??null;$rem=inventory_product_remaining($snap,$ep,(int)$prod['product_id']);
+        echo '<label class="inventory-editor-row"><span><strong>'.h($prod['name']).'</strong><small>'.h(t('inventory_ordered')).': '.(int)($snap['product_used'][$ep]??0).($rem===null?'':' · '.h(t('inventory_remaining')).': '.$rem).'</small></span>'.inventory_row_inputs('product_stock',$ep,$cap).'</label>';}
+    echo '</div></div></div><div class="inventory-savebar"><button class="btn primary" type="submit">'.h(t('save')).' · '.h(t('inventory_title')).'</button></div></form></section>';render_footer();
+}
+
 function page_home(): void {
     $pdo = db();
     $events = $pdo->query("SELECT * FROM events WHERE status = 'public' ORDER BY COALESCE(event_date,'9999-12-31'), created_at DESC")->fetchAll();
@@ -582,12 +731,18 @@ function page_home(): void {
     echo '<section id="events" class="section"><div class="section-title"><h2>' . h(t('open_events')) . '</h2></div>';
     if (!$events) { echo '<div class="empty">' . h(t('no_public_events')) . '</div>'; }
     else {
-        echo '<div class="grid cols-3">';
-        foreach ($events as $e) {
-            echo '<article class="card solid"><span class="pill public">' . h(t('public')) . '</span><h3 style="margin-top:14px">' . h($e['title']) . '</h3>';
-            if ($e['event_date']) { echo '<p class="muted">' . h(t('event_date')) . ': ' . h($e['event_date']) . '</p>'; }
-            if ($e['description']) { echo '<p>' . nl2br(h($e['description'])) . '</p>'; } echo weather_day_badge($e['event_date']);
-            echo '<a class="btn primary" href="' . h(route('event', ['slug' => $e['slug']])) . '">' . h(t('join_event')) . '</a></article>';
+        echo '<div class="public-events-grid">';
+        foreach($events as $e){
+            $eventDay=(string)($e['event_date']??'');$today=$eventDay===date('Y-m-d');$forecast=$eventDay?weather_day($eventDay):null;
+            $formattedDate=$eventDay?(date('d.m.Y',strtotime($eventDay))):'—';
+            echo '<article class="public-event-card"><div class="public-event-header"><span class="event-badge">'.($today?'● '.h(t('inventory_today')):'✦ '.h(t('public'))).'</span><span class="public-event-id">BBQ · '.h(strtoupper(substr($e['slug'],0,18))).'</span></div>';
+            echo '<div class="public-event-main"><div class="event-visual"><img src="assets/hero-grill.svg" alt="" loading="lazy"></div><div><div class="public-event-date">📅 '.h($formattedDate).'</div><h3>'.h($e['title']).'</h3>';
+            if($e['description'])echo '<p class="public-event-description">'.nl2br(h($e['description'])).'</p>';
+            echo '</div></div>';
+            if($forecast){
+                echo '<div class="public-weather"><div class="weather-overview"><span class="weather-glyph" aria-hidden="true">'.h($forecast['icon']).'</span><div><small>'.h(t('weather_forecast')).'</small><strong>'.h($forecast['min']).'–'.h($forecast['max']).'°C</strong></div></div><div class="weather-mini-metrics"><div><span>☔</span><b>'.h($forecast['rain']).'%</b><small>'.h(t('inventory_rain')).'</small></div><div><span>🍃</span><b>'.h($forecast['wind']).' km/h</b><small>'.h(t('inventory_wind')).'</small></div><div><span>☀️</span><b>'.h($forecast['sun']).' h</b><small>'.h(t('inventory_sun')).'</small></div></div></div>';
+            }elseif($eventDay){echo '<div class="public-weather-unavailable">☁ '.h(t('forecast_unavailable')).'</div>';}
+            echo '<a class="public-event-cta" href="'.h(route('event',['slug'=>$e['slug']])).'"><span>🍽️ '.h(t('join_event')).'</span><span aria-hidden="true">→</span></a></article>';
         }
         echo '</div>';
     }
@@ -670,10 +825,13 @@ function page_admin(): void {
             $stmt = $pdo->prepare('INSERT INTO events(title,slug,event_date,description,status) VALUES(?,?,?,?,?)');
             $stmt->execute([$title, $slug, $event['event_date'], $event['description'], 'draft']);
             $newId = (int)$pdo->lastInsertId();
+            $pdo->prepare('UPDATE events SET inventory_enabled=? WHERE id=?')->execute([(int)$event['inventory_enabled'],$newId]);
+            $stockCopy=$pdo->prepare('INSERT INTO event_inventory(event_id,ingredient_id,stock_quantity) SELECT ?,ingredient_id,stock_quantity FROM event_inventory WHERE event_id=?');
+            $stockCopy->execute([$newId,$id]);
             $items = $pdo->prepare('SELECT * FROM event_products WHERE event_id = ?');
             $items->execute([$id]);
             foreach ($items->fetchAll() as $item) {
-                $pdo->prepare('INSERT INTO event_products(event_id,product_id,sort_order,active) VALUES(?,?,?,?)')->execute([$newId, $item['product_id'], $item['sort_order'], $item['active']]);
+                $pdo->prepare('INSERT INTO event_products(event_id,product_id,sort_order,active,stock_limit) VALUES(?,?,?,?,?)')->execute([$newId, $item['product_id'], $item['sort_order'], $item['active'],$item['stock_limit']]);
             }
             flash(t('event_cloned'));
             redirect_to('admin_event', ['id' => $newId]);
@@ -695,7 +853,7 @@ function page_admin(): void {
     echo '<section class="section"><div class="section-title"><h2>' . h(t('admin_dashboard')) . '</h2></div>'; admin_tabs(); echo '<div class="queue-stats admin-kpis">';foreach(['guests'=>t('guests'),'pending'=>t('pending'),'in_progress'=>t('in_progress'),'done'=>t('done')] as $key=>$label){echo '<div class="queue-stat ' . h($key) . '"><span>' . h($label) . '</span><strong>' . h($dashboardStats[$key]) . '</strong></div>';}echo '</div>'; page_weather_widget();render_today_events($events); echo '<div class="grid cols-2"><div class="card"><h3>' . h(t('new_event')) . '</h3><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="create_event"><div class="field"><label>' . h(t('title')) . '</label><input name="title" required placeholder="Sommer BBQ"></div><div class="field"><label>' . h(t('event_date')) . '</label><input name="event_date" type="date" value="' . h(date('Y-m-d')) . '"></div><div class="field"><label>' . h(t('description')) . '</label><textarea name="description" placeholder="Hinweise für Gäste"></textarea></div><input class="primary" type="submit" value="' . h(t('create')) . '"></form></div><div class="card"><h3>' . h(t('events')) . '</h3><p class="muted">' . h(t('public_hint')) . '</p><p class="muted">' . h(t('guests_hint')) . '</p></div></div>';
     echo '<div class="section"><div class="table-wrap"><table><thead><tr><th>' . h(t('title')) . '</th><th>' . h(t('event_date')) . '</th><th>' . h(t('status')) . '</th><th>' . h(t('guests')) . '</th><th>' . h(t('actions')) . '</th></tr></thead><tbody>';
     foreach ($events as $e) {
-        echo '<tr><td><a class="event-name-link" href="' . h(route('admin_kitchen',['id'=>$e['id']])) . '">' . h($e['title']) . ' →</a><br><span class="muted">/' . h($e['slug']) . '</span></td><td>' . h($e['event_date'] ?: '-') . weather_day_badge($e['event_date']) . '</td><td><span class="pill ' . h($e['status']) . '">' . h(status_label($e['status'])) . '</span></td><td><strong>' . h((string)$e['guest_count']) . '</strong><br><span class="muted">' . h(t('orders')) . ': ' . h((string)$e['item_count']) . '</span></td><td class="nowrap"><div class="split-actions"><a class="btn small primary" href="' . h(route('admin_event', ['id' => $e['id']])) . '">' . h(t('edit')) . '</a><a class="btn small green" href="' . h(route('admin_kitchen', ['id' => $e['id']])) . '">' . h(t('kitchen')) . '</a><form class="inline-form" method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="clone_event"><input type="hidden" name="id" value="' . h($e['id']) . '"><button class="btn small ghost" type="submit">' . h(t('clone')) . '</button></form><form class="inline-form" method="post" onsubmit="return confirm(\'' . h(t('confirm_delete_event')) . '\')"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="delete_event"><input type="hidden" name="id" value="' . h($e['id']) . '"><button class="btn small red" type="submit">' . h(t('delete')) . '</button></form></div></td></tr>';
+        echo '<tr><td><a class="event-name-link" href="' . h(route('admin_kitchen',['id'=>$e['id']])) . '">' . h($e['title']) . ' →</a><br><span class="muted">/' . h($e['slug']) . '</span></td><td>' . h($e['event_date'] ?: '-') . weather_day_badge($e['event_date']) . '</td><td><span class="pill ' . h($e['status']) . '">' . h(status_label($e['status'])) . '</span></td><td><strong>' . h((string)$e['guest_count']) . '</strong><br><span class="muted">' . h(t('orders')) . ': ' . h((string)$e['item_count']) . '</span></td><td class="nowrap"><div class="split-actions"><a class="btn small primary" href="' . h(route('admin_event', ['id' => $e['id']])) . '">' . h(t('edit')) . '</a><a class="btn small green" href="' . h(route('admin_kitchen', ['id' => $e['id']])) . '">' . h(t('kitchen')) . '</a><a class="btn small ghost" href="' . h(route('admin_inventory',['id'=>$e['id']])) . '">📦 ' . h(t('inventory_title')) . '</a><form class="inline-form" method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="clone_event"><input type="hidden" name="id" value="' . h($e['id']) . '"><button class="btn small ghost" type="submit">' . h(t('clone')) . '</button></form><form class="inline-form" method="post" onsubmit="return confirm(\'' . h(t('confirm_delete_event')) . '\')"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="delete_event"><input type="hidden" name="id" value="' . h($e['id']) . '"><button class="btn small red" type="submit">' . h(t('delete')) . '</button></form></div></td></tr>';
     }
     echo '</tbody></table></div></div></section>';
     render_footer();
@@ -743,6 +901,7 @@ function page_admin_event(): void {
     render_header($event['title']);
     echo '<section class="section"><div class="section-title"><h2>' . h($event['title']) . '</h2><a class="btn ghost" href="' . h(route('admin')) . '">' . h(t('back')) . '</a></div>'; admin_tabs();
     $event = get_event($id);
+    echo '<div class="event-admin-tools"><a class="btn primary" href="'.h(route('admin_inventory',['id'=>$id])).'">📦 '.h(t('inventory_title')).'</a><a class="btn ghost" href="'.h(route('admin_kitchen',['id'=>$id])).'">🔥 '.h(t('kitchen')).'</a></div>';
     echo '<div class="grid cols-2"><div class="card"><h3>' . h(t('edit')) . '</h3><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="save_event"><div class="field"><label>' . h(t('title')) . '</label><input name="title" value="' . h($event['title']) . '" required></div><div class="form-row"><div class="field"><label>' . h(t('event_date')) . '</label><input name="event_date" type="date" value="' . h($event['event_date']) . '"></div><div class="field"><label>' . h(t('status')) . '</label><select name="status"><option value="draft" ' . ($event['status']==='draft'?'selected':'') . '>' . h(t('draft')) . '</option><option value="public" ' . ($event['status']==='public'?'selected':'') . '>' . h(t('public')) . '</option><option value="closed" ' . ($event['status']==='closed'?'selected':'') . '>' . h(t('closed')) . '</option></select></div></div><div class="field"><label>' . h(t('description')) . '</label><textarea name="description">' . h($event['description']) . '</textarea></div><h3>' . h(t('event_products')) . '</h3><div class="grid">';
     foreach ($products as $p) {
         $checked = in_array((int)$p['id'], $selected, true) ? 'checked' : '';
@@ -828,6 +987,14 @@ function ingredient_picker(int $productId=0):void {
     }
     echo '</div><small><a href="' . h(route('admin_ingredients')) . '">+ ' . h(t('manage_ingredients')) . '</a></small></div>';
 }
+function recipe_picker(int $productId=0): void {
+    $q=db()->prepare('SELECT ingredient_id,units_per_item FROM product_recipes WHERE product_id=?');$q->execute([$productId]);$selected=[];
+    foreach($q as $row){$selected[(int)$row['ingredient_id']]=(int)$row['units_per_item'];}
+    $items=db()->query('SELECT id,name,group_name FROM ingredients WHERE active=1 ORDER BY group_name,name')->fetchAll();
+    echo '<div class="recipe-picker"><h4>'.h(t('recipe_title')).'</h4><p class="muted">'.h(t('recipe_hint')).'</p><div class="recipe-grid">';
+    foreach($items as $it){$id=(int)$it['id'];echo '<label class="recipe-entry"><span>'.h($it['name']).'</span><small>'.h($it['group_name']).'</small><input type="number" name="recipe['.$id.']" min="0" max="100" inputmode="numeric" value="'.h($selected[$id]??0).'" aria-label="'.h(t('recipe_units')).' '.h($it['name']).'"></label>';}
+    echo '</div><small class="muted">'.h(t('recipe_zero_hint')).'</small></div>';
+}
 function page_admin_products(): void {
     require_admin();
     $pdo = db();
@@ -884,6 +1051,12 @@ function page_admin_products(): void {
                 $pdo->prepare('INSERT OR IGNORE INTO product_ingredients(product_id,ingredient_id) SELECT ?,id FROM ingredients WHERE id=?')->execute([$id,$iid]);
             }
         }
+        $pdo->prepare('DELETE FROM product_recipes WHERE product_id=?')->execute([$id]);
+        foreach((array)($_POST['recipe']??[]) as $ingredientId=>$num){
+            $iid=(int)$ingredientId;$str=trim((string)$num);
+            if($iid<=0 || !preg_match('/^\d{1,3}$/',$str) || (int)$str<=0 || (int)$str>100)continue;
+            $pdo->prepare('INSERT OR IGNORE INTO product_recipes(product_id,ingredient_id,units_per_item) SELECT ?,id,? FROM ingredients WHERE id=?')->execute([$id,(int)$str,$iid]);
+        }
         flash(t('product_saved'));
         redirect_to('admin_products');
     }
@@ -893,7 +1066,7 @@ function page_admin_products(): void {
     echo '<section class="section"><div class="section-title"><div><span class="eyebrow">MENU LIBRARY</span><h1>' . h(t('products')) . '</h1><p class="muted">' . h(t('select_ingredients_hint')) . '</p></div></div>';admin_tabs();
     echo '<details class="card editor-disclosure" open><summary>＋ ' . h(t('add_product')) . '</summary><form method="post" class="product-edit-form"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="save_product"><div class="form-row"><div class="field"><label>' . h(t('product_name')) . '</label><input name="name" required placeholder="PenguBurger"></div><div class="field"><label>' . h(t('category')) . '</label><select name="category_id">';
     foreach($categories as $c){echo '<option value="' . h($c['id']) . '">' . h($c['icon'].' '.$c['name']) . '</option>';}
-    echo '</select></div></div><div class="field"><label>' . h(t('product_description')) . '</label><textarea name="description" placeholder="Smoky classic burger…"></textarea></div>';ingredient_picker();
+    echo '</select></div></div><div class="field"><label>' . h(t('product_description')) . '</label><textarea name="description" placeholder="Smoky classic burger…"></textarea></div>';ingredient_picker();recipe_picker();
     echo '<div class="split-actions"><label class="check-chip"><input type="checkbox" name="allow_doneness">' . h(t('allow_doneness')) . '</label><label class="check-chip"><input type="checkbox" name="active" checked>' . h(t('active')) . '</label></div><br><button class="primary" type="submit">' . h(t('add_product')) . '</button></form></details>';
     echo '<div class="section-title compact" style="margin-top:30px"><div><h2>' . h(t('products')) . ' <span class="pill">' . h(count($products)) . '</span></h2><small class="muted">' . h(t('drag_sort_hint')) . '</small></div><form method="post" onsubmit="document.getElementById(\'product-order\').value=sortableOrder(\'product-list\')"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="sort_products"><input type="hidden" id="product-order" name="order"><button class="btn primary" type="submit">' . h(t('save_order')) . '</button></form></div>';
     echo '<div id="product-list" class="admin-item-list">';
@@ -901,7 +1074,7 @@ function page_admin_products(): void {
         echo '<div data-sort-id="' . h($product['id']) . '" class="admin-sort-item"><span class="drag-handle" title="' . h(t('drag_to_sort')) . '">☰</span><details class="editor-disclosure"><summary><span class="food-icon">' . h($product['category_icon']) . '</span><span><strong>' . h($product['name']) . '</strong><small class="muted">' . h($product['category_name']) . ' · ' . ((int)$product['active']?h(t('active')):h(t('closed'))) . '</small></span><span class="edit-arrow">⌄</span></summary><form method="post" class="product-edit-form"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="id" value="' . h($product['id']) . '"><div class="form-row"><div class="field"><label>' . h(t('product_name')) . '</label><input name="name" value="' . h($product['name']) . '" required></div><div class="field"><label>' . h(t('category')) . '</label><select name="category_id">';
         foreach($categories as $c){echo '<option value="' . h($c['id']) . '" ' . ((int)$c['id']===(int)$product['category_id']?'selected':'') . '>' . h($c['icon'].' '.$c['name']) . '</option>';}
         echo '</select></div></div><div class="field"><label>' . h(t('product_description')) . '</label><textarea name="description">' . h($product['description']) . '</textarea></div>';
-        ingredient_picker((int)$product['id']);
+        ingredient_picker((int)$product['id']);recipe_picker((int)$product['id']);
         echo '<div class="split-actions"><label class="check-chip"><input type="checkbox" name="allow_doneness" ' . ($product['allow_doneness']?'checked':'') . '>' . h(t('allow_doneness')) . '</label><label class="check-chip"><input type="checkbox" name="active" ' . ($product['active']?'checked':'') . '>' . h(t('active')) . '</label></div><div class="split-actions editor-buttons"><button class="btn primary" name="action" value="save_product" type="submit">' . h(t('save')) . '</button><button class="btn red" name="action" value="delete_product" type="submit" onclick="return confirm(' . h(json_encode(t('confirm_delete_product'))) . ')">' . h(t('delete')) . '</button></div></form></details></div>';
     }
     echo '</div><div class="notice warn">' . h(t('delete_product_warning')) . '</div></section>';
@@ -1194,19 +1367,30 @@ function page_event(): void {
                 $chosen[]=[$epId,$qty,$doneness,$selected,substr(trim((string)($data['note']??'')),0,300)];
             }
             if(!$chosen){flash(t('no_items_selected'),'bad');redirect_to('event',['slug'=>$slug]);}
-            $pdo->beginTransaction();
+            $pdo->exec('BEGIN IMMEDIATE');
             if($orderId>0) {
-                if(!order_eligible($orderId,$event,$guest)){$pdo->rollBack();flash(t('order_locked'),'bad');redirect_to('event',['slug'=>$slug]);}
+                if(!order_eligible($orderId,$event,$guest)){$pdo->exec('ROLLBACK');flash(t('order_locked'),'bad');redirect_to('event',['slug'=>$slug]);}
                 $pdo->prepare('DELETE FROM order_items WHERE order_id=?')->execute([$orderId]);
                 $pdo->prepare("UPDATE orders SET status='pending',updated_at=CURRENT_TIMESTAMP WHERE id=?")->execute([$orderId]);
             } else {
                 $pdo->prepare("INSERT INTO orders(event_id,guest_id,status) VALUES(?,?,'pending')")->execute([$event['id'],$guest['id']]);
                 $orderId=(int)$pdo->lastInsertId();
             }
-            $q=$pdo->prepare("INSERT INTO order_items(order_id,event_product_id,quantity,doneness,options_json,note,status) VALUES(?,?,?,?,?,?,'pending')");
-            foreach($chosen as $row){$q->execute([$orderId,$row[0],$row[1],$row[2],json_encode($row[3],JSON_UNESCAPED_UNICODE),$row[4]]);}
-            $pdo->commit();$_SESSION['order_sent']=true;
-            flash(t('order_saved'));redirect_to('event',['slug'=>$slug]);
+            $snap=inventory_snapshot((int)$event['id']);
+            if($problem=inventory_check_order($snap,$chosen,$allowed)){
+                $pdo->exec('ROLLBACK');flash(t('stock_conflict',['name'=>$problem]),'bad');redirect_to('event',['slug'=>$slug]);
+            }
+            $q=$pdo->prepare("INSERT INTO order_items(order_id,event_product_id,quantity,doneness,options_json,note,status,stock_recorded) VALUES(?,?,?,?,?,?,'pending',?)");
+            $componentInsert=$pdo->prepare('INSERT INTO order_item_components(item_id,ingredient_id,units_used) VALUES(?,?,?)');
+            foreach($chosen as $row){
+                $q->execute([$orderId,$row[0],$row[1],$row[2],json_encode($row[3],JSON_UNESCAPED_UNICODE),$row[4],$snap['enabled']?1:0]);
+                $itemId=(int)$pdo->lastInsertId();$pid=(int)$allowed[$row[0]]['id'];$needed=[];
+                foreach($snap['recipe'][$pid]??[] as $iid=>$units){$needed[$iid]=($needed[$iid]??0)+$row[1]*$units;}
+                foreach(array_unique($row[3]) as $opt){$iid=$snap['options'][$pid][$opt]??null;if($iid!==null)$needed[$iid]=($needed[$iid]??0)+$row[1];}
+                if($snap['enabled'])foreach($needed as $iid=>$amount){$componentInsert->execute([$itemId,$iid,$amount]);}
+            }
+            $pdo->exec('COMMIT');$_SESSION['order_sent']=true;
+            flash(t('order_saved'));redirect_to('event',['slug'=>$slug,'saved'=>1]);
         }
     }
     render_header($event['title']);
@@ -1224,6 +1408,20 @@ function page_event(): void {
         }
     }
     echo '</section>';render_footer();
+}
+function page_guest_inventory_api(): void {
+    $event=get_event_by_slug((string)($_GET['slug']??''));
+    header('Content-Type: application/json; charset=utf-8');header('Cache-Control: private,no-store');
+    if(!$event || !guest_for_event($event)){http_response_code(403);echo '{}';return;}
+    $orderId=max(0,(int)($_GET['edit']??0));$guest=guest_for_event($event);
+    if($orderId && !$guest || ($orderId && !order_eligible($orderId,$event,$guest)))$orderId=0;
+    $snap=inventory_snapshot((int)$event['id'],$orderId);$result=['enabled'=>$snap['enabled'],'products'=>[]];
+    foreach(event_menu_items((int)$event['id']) as $prod){
+        $ep=(int)$prod['event_product_id'];$id=(int)$prod['id'];$options=[];
+        foreach(decode_options($prod['options_json']) as $opt){$options[$opt]=inventory_option_remaining($snap,$id,$opt);}
+        $result['products'][(string)$ep]=['remaining'=>inventory_product_remaining($snap,$ep,$id),'options'=>$options];
+    }
+    echo json_encode($result,JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE);
 }
 function page_guest_status_api(): void {
     $event=get_event_by_slug((string)($_GET['slug']??''));
@@ -1243,20 +1441,30 @@ function show_guest_order_form(array $event,array $guest,int $editId=0):void {
     $items=event_menu_items((int)$event['id']);
     if(!$items){return;}
     $previous=[];
+    $snap=inventory_snapshot((int)$event['id'],$editId);
     if($editId>0){$q=db()->prepare('SELECT * FROM order_items WHERE order_id=?');$q->execute([$editId]);foreach($q as $item){$previous[(int)$item['event_product_id']]=$item;}}
     $categories=[];foreach($items as $it){$key=$it['category_name'];if(!isset($categories[$key])){$categories[$key]=$it['category_icon'];}}
-    echo '<section class="order-wizard card" id="order-wizard" data-edit="' . h($editId) . '"><div class="wizard-head"><div><span class="eyebrow">' . h(t('your_menu')) . '</span><h2>' . h($editId?t('edit_order'):t('build_order')) . '</h2></div><span class="step-indicator" id="step-counter">1 / 3</span></div><div class="wizard-progress"><i id="wizard-progress"></i></div>';
+    echo '<section class="order-wizard card" id="order-wizard" data-event-id="' . h($event['id']) . '" data-edit="' . h($editId) . '" data-stock-message="' . h(t('stock_conflict_general')) . '" data-stock-template="' . h(t('stock_only_left')) . '" data-stock-out="' . h(t('sold_out')) . '" data-stock-url="' . h(route('guest_inventory_api',['slug'=>$event['slug'],'edit'=>$editId])) . '"><div class="wizard-head"><div><span class="eyebrow">' . h(t('your_menu')) . '</span><h2>' . h($editId?t('edit_order'):t('build_order')) . '</h2></div><span class="step-indicator" id="step-counter">1 / 3</span></div><div class="wizard-progress"><i id="wizard-progress"></i></div>';
     echo '<form method="post" id="guest-order-form" data-order-form="1" novalidate><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="order"><input type="hidden" name="order_id" value="' . h($editId) . '">';
     echo '<div class="wizard-panel" data-step="1"><h3>' . h(t('choose_category')) . '</h3><p class="muted">' . h(t('choose_category_hint')) . '</p><div class="category-pills">';
     foreach($categories as $label=>$icon){echo '<button class="category-pill" data-category="' . h($label) . '" type="button"><span>' . h($icon) . '</span><strong>' . h($label) . '</strong><span>→</span></button>';}
     echo '</div></div>';
     echo '<div class="wizard-panel" data-step="2" hidden><div class="wizard-row"><h3>' . h(t('select_and_customize')) . '</h3><button type="button" class="btn ghost small" id="choose-other-category">' . h(t('all_categories')) . '</button></div><p class="muted">' . h(t('tap_to_add')) . '</p><div class="menu-catalog">';
     foreach($items as $item){
-        $id=(int)$item['event_product_id'];$old=$previous[$id]??[];$optOld=$old?decode_options($old['options_json']):[];
-        echo '<article class="menu-product" data-category="' . h($item['category_name']) . '" data-product="' . h($item['name']) . '"><div class="menu-product-top"><div class="food-icon">' . h($item['category_icon']) . '</div><div class="food-info"><h4>' . h($item['name']) . '</h4><p>' . h($item['description']) . '</p></div><div class="qty-stepper"><button class="qty-btn" type="button" data-delta="-1" aria-label="Less">−</button><input class="qty-input" type="number" name="items[' . $id . '][quantity]" min="0" max="20" value="' . h($old['quantity']??0) . '" inputmode="numeric"><button class="qty-btn" type="button" data-delta="1" aria-label="More">+</button></div></div>';
+        $id=(int)$item['event_product_id'];$pid=(int)$item['id'];$old=$previous[$id]??[];$optOld=$old?decode_options($old['options_json']):[];
+        $remaining=inventory_product_remaining($snap,$id,$pid);
+        $soldOut=$remaining!==null && $remaining<=0;
+        $maxQty=$remaining===null?20:min(20,max(0,$remaining));
+        echo '<article class="menu-product'.($soldOut?' sold-out':'').'" data-ep-id="'.$id.'" data-category="'.h($item['category_name']).'" data-product="'.h($item['name']).'">';
+        echo '<div class="menu-product-top"><div class="food-icon">'.h($item['category_icon']).'</div><div class="food-info"><h4>'.h($item['name']).'</h4><p>'.h($item['description']).'</p>';
+        if($remaining!==null){echo '<span class="stock-pill '.($soldOut?'sold':'few').'">'.h($soldOut?t('sold_out'):t('stock_only_left',['count'=>$remaining])).'</span>';}
+        echo '</div><div class="qty-stepper"><button class="qty-btn" type="button" data-delta="-1" aria-label="Less">−</button><input class="qty-input" type="number" name="items['.$id.'][quantity]" min="0" max="'.$maxQty.'" value="'.h($old['quantity']??0).'" inputmode="numeric" '.($soldOut?'disabled':'').'><button class="qty-btn" type="button" data-delta="1" aria-label="More" '.($soldOut?'disabled':'').'>+</button></div></div>';
         $opts=decode_options($item['options_json']);
         if($opts || (int)$item['allow_doneness']){echo '<div class="product-options"><div class="option-label">' . h(t('make_it_yours')) . '</div>';}
-        if($opts){echo '<div class="option-grid">';foreach($opts as $opt){echo '<label class="check-chip"><input type="checkbox" name="items[' . $id . '][options][]" value="' . h($opt) . '" ' . (in_array($opt,$optOld,true)?'checked':'') . '><span>' . h($opt) . '</span></label>';}echo '</div>';}
+        if($opts){echo '<div class="option-grid">';foreach($opts as $opt){$optRem=inventory_option_remaining($snap,$pid,$opt);$optOut=$optRem!==null && $optRem<=0;
+            echo '<label class="check-chip'.($optOut?' option-out':'').'"><input type="checkbox" name="items['.$id.'][options][]" value="'.h($opt).'" '.(in_array($opt,$optOld,true)?'checked':'').' '.($optOut||$soldOut?'disabled':'').' data-stock="'.h($optRem===null?'':(string)$optRem).'"><span>'.h($opt).'</span>'.($optOut?'<small>'.h(t('sold_out')).'</small>':'').'</label>';}
+            echo '</div>';}
+
         if((int)$item['allow_doneness']){echo '<div class="field doneness-field"><label>' . h(t('doneness')) . '</label><select name="items[' . $id . '][doneness]"><option value="">—</option>';foreach(doneness_options() as $k=>$v){echo '<option value="' . h($k) . '" ' . (($old['doneness']??'')===$k?'selected':'') . '>' . h($v) . '</option>';}echo '</select></div>';}
         if($opts || (int)$item['allow_doneness']){echo '</div>';}
         echo '<div class="field notes-field"><label>' . h(t('note')) . '</label><input name="items[' . $id . '][note]" maxlength="300" value="' . h($old['note']??'') . '" placeholder="' . h(t('notes_placeholder')) . '"></div></article>';
@@ -1343,7 +1551,8 @@ function page_admin_kitchen():void {
     }
     render_header(t('kitchen'));echo '<section class="section kitchen-shell"><div class="section-title"><div><span class="eyebrow">KITCHEN DISPLAY</span><h1>' . h(t('kitchen')) . '</h1><p class="muted">' . h($event['title']) . '</p></div><div class="split-actions"><a href="' . h(route('admin_event',['id'=>$id])) . '" class="btn ghost">← ' . h(t('event_details')) . '</a><button class="btn ghost" id="kitchen-fullscreen" type="button">⛶ ' . h(t('fullscreen')) . '</button></div></div>';
     page_event_weather($event);
-    echo '<div class="kitchen-toolbar"><div class="field"><label>' . h(t('search_orders')) . '</label><input id="kitchen-search" type="search" placeholder="' . h(t('guest')) . ', #123, ' . h(t('products')) . '"></div><span class="live-dot">' . h(t('live_updates')) . '</span></div>';
+    echo '<div class="kitchen-inventory-link"><a class="btn ghost small" href="'.h(route('admin_inventory',['id'=>$id])).'">📦 '.h(t('inventory_title')).'</a></div>';
+    echo '<div class="kitchen-toolbar" ><div class="field"><label>' . h(t('search_orders')) . '</label><input id="kitchen-search" type="search" placeholder="' . h(t('guest')) . ', #123, ' . h(t('products')) . '"></div><span class="live-dot">' . h(t('live_updates')) . '</span></div>';
     echo '<div id="kitchen-live-board" data-csrf="' . h(csrf_token()) . '" data-status-url="' . h(route('kitchen_action_api',['id'=>$id])) . '" data-poll-url="' . h(route('kitchen_api',['id'=>$id])) . '">';render_kitchen_board(kitchen_items($id));echo '</div></section>';render_footer();
 }
 function render_ticket(array $it):void {
@@ -1364,11 +1573,13 @@ try {
         'home' => page_home(),
         'setup' => page_setup(),
         'guest_status_api' => page_guest_status_api(),
+        'guest_inventory_api' => page_guest_inventory_api(),
         'kitchen_api' => page_kitchen_api(),
         'kitchen_action_api' => page_kitchen_action_api(),
         'weather_search_api' => page_weather_search_api(),
         'admin_settings' => page_admin_settings(),
         'admin_ingredients' => page_admin_ingredients(),
+        'admin_inventory' => page_admin_inventory(),
         'admin_guests' => page_admin_guests(),
         'admin_login' => page_admin_login(),
         'admin_logout' => page_admin_logout(),

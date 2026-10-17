@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.0.0-beta.4
+
+- Public event cards redesigned with a dedicated weather panel, date, and clearer mobile join action.
+- Event-specific optional stock management: ingredient quantities, direct product caps, required recipes, selectable toppings and sold-out notices.
+- Atomic checkout inventory validation under SQLite write lock, with a per-order ingredient reservation ledger so later recipe edits do not alter existing consumption.
+- Automatic stock release for cancelled/deleted orders and order edits; completed orders keep stock consumed.
+- Event cloning copies starting stock and caps without copying orders.
+- Guest stock availability updates without reloading the order wizard.
+- Include safe Proxmox updater with automatic CT detection and pull-before-stop.
+- Integration smoke checks for stock cap, overselling and cancellation release.
+
 ## 2.0.0-beta.3
 
 - Fix guest order wizard scrolling to the top when selecting ingredients, quantities, doneness or notes: category click handler is now bound only to category navigation buttons.

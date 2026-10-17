@@ -9,13 +9,26 @@
     const panels = [...wizard.querySelectorAll('.wizard-panel')];
     const next = $('wizard-next'), back = $('wizard-back'), submit = $('wizard-submit');
     const countLabel = ($('cart-counter').textContent.replace(/^\d+\s*/, '') || 'items');
-    const draftKey = 'griller-v2-draft:' + location.pathname + location.search.split('&edit=')[0] + ':' + wizard.dataset.edit;
+    const draftKey = 'griller-v2-draft:' + wizard.dataset.eventId + ':' + wizard.dataset.edit;
+    if (new URLSearchParams(location.search).has('saved')) { try { sessionStorage.removeItem(draftKey); } catch (_) {} }
     let step = 1, activeCategory = '';
     const cards = () => [...form.querySelectorAll('.menu-product')];
     const qty = card => card.querySelector('.qty-input');
     const picked = () => cards().filter(card => Number(qty(card).value) > 0);
     const count = () => picked().reduce((n, card) => n + Number(qty(card).value), 0);
     const refreshCount = () => { $('cart-counter').textContent = String(count()) + ' ' + countLabel; };
+    const stockNotice = el('p', 'inventory-alert', ''); stockNotice.hidden = true;
+    const panel2 = wizard.querySelector('[data-step="2"]'); panel2.appendChild(stockNotice);
+    const checkStock = () => {
+      for (const card of picked()) {
+        const number = Number(qty(card).value);
+        if (qty(card).disabled || number > Number(qty(card).max || 20) || [...card.querySelectorAll('input[type=checkbox]:checked')].some(opt => opt.dataset.stock !== '' && Number(opt.dataset.stock) < number)) {
+          stockNotice.textContent = wizard.dataset.stockMessage || 'Not enough stock.';
+          stockNotice.hidden = false; return false;
+        }
+      }
+      stockNotice.hidden = true; return true;
+    };
     const saveDraft = () => {
       const values = [...form.elements].filter(x => x.name && !['hidden', 'submit'].includes(x.type))
         .map(x => ({ name: x.name, value: x.value, checked: x.checked, type: x.type }));
@@ -69,13 +82,14 @@
       if (step === 1) { activeCategory = ''; show(2, true); }
       else if (step === 2) {
         if (!count()) { $('cart-counter').classList.add('attention'); setTimeout(() => $('cart-counter').classList.remove('attention'), 1100); return; }
+        if (!checkStock()) return;
         show(3, true);
       }
     });
     back.addEventListener('click', () => show(Math.max(1, step - 1), true));
     form.querySelectorAll('[data-delta]').forEach(button => button.addEventListener('click', () => {
       const input = button.parentNode.querySelector('.qty-input');
-      input.value = Math.min(20, Math.max(0, Number(input.value || 0) + Number(button.dataset.delta)));
+      input.value = Math.min(Number(input.max || 20), Math.max(0, Number(input.value || 0) + Number(button.dataset.delta)));
       input.dispatchEvent(new Event('input', { bubbles: true }));
     }));
     form.addEventListener('change', e => {
@@ -83,16 +97,52 @@
       const target = e.target;
       if ((target.matches('input[type="checkbox"]') && target.checked) || (target.matches('select') && target.value)) {
         const card = target.closest('.menu-product');
-        if (card && Number(qty(card).value) === 0) qty(card).value = 1;
+        if (card && !qty(card).disabled && Number(qty(card).value) === 0 && Number(qty(card).max || 20) >= 1) qty(card).value = 1;
       }
       refreshCount(); saveDraft();
     });
     form.addEventListener('input', e => {
       const target = e.target;
-      if (target.classList.contains('qty-input')) target.value = String(Math.min(20, Math.max(0, Number(target.value || 0))));
+      if (target.classList.contains('qty-input')) target.value = String(Math.min(Number(target.max || 20), Math.max(0, Number(target.value || 0))));
       refreshCount(); saveDraft();
     });
-    form.addEventListener('submit', e => { if (!count()) { e.preventDefault(); show(2, true); return; } sessionStorage.removeItem(draftKey); });
+    form.addEventListener('submit', e => { if (!count() || !checkStock()) { e.preventDefault(); show(2, true); return; } saveDraft(); });
+    // Lightweight stock refresh; update only availability attributes, never rebuild cards or scroll.
+    if (wizard.dataset.stockUrl) {
+      const syncInventory = async () => {
+        if (document.hidden) return;
+        try {
+          const res = await fetch(wizard.dataset.stockUrl, { credentials:'same-origin', cache:'no-store' });
+          if (!res.ok) return;
+          const data = await res.json();
+          for (const card of cards()) {
+            const entry = data.products?.[card.dataset.epId]; if (!entry) continue;
+            const input = qty(card), stock = entry.remaining;
+            input.max = String(stock === null ? 20 : Math.min(20, Math.max(0, stock)));
+            const noStock = stock !== null && stock <= 0;
+            if (noStock && Number(input.value) === 0) input.disabled = true;
+            else input.disabled = false;
+            card.classList.toggle('sold-out', noStock);
+            const plus = card.querySelector('[data-delta="1"]');
+            if (plus) plus.disabled = noStock || Number(input.value) >= Number(input.max);
+            let pill = card.querySelector('.stock-pill');
+            if (!pill && stock !== null) { pill = el('span', 'stock-pill', ''); card.querySelector('.food-info')?.appendChild(pill); }
+            if (pill) {
+              pill.textContent = stock === null ? '' : noStock ? wizard.dataset.stockOut : wizard.dataset.stockTemplate.replace('{count}', stock);
+              pill.hidden = stock === null;
+              pill.classList.toggle('sold',noStock);
+            }
+            card.querySelectorAll('input[type=checkbox][data-stock]').forEach(option => {
+              const available = entry.options?.[option.value];
+              option.dataset.stock = available === null || available === undefined ? '' : String(available);
+              option.disabled = noStock || (available !== null && available !== undefined && available <= 0 && !option.checked);
+              option.closest('.check-chip')?.classList.toggle('option-out', available !== null && available !== undefined && available <= 0);
+            });
+          }
+        } catch (_) { /* Status will be verified by the server at order submission. */ }
+      };
+      setInterval(syncInventory, 25000);
+    }
     refreshCount(); show(wizard.dataset.edit !== '0' ? 2 : 1);
   }
 

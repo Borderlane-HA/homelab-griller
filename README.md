@@ -73,7 +73,19 @@ Run on the **Proxmox host**:
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Borderlane-HA/homelab-griller/main/scripts/proxmox-lxc-update.sh)"
 ```
 
-Enter your CT ID. The updater stops the application briefly, backs up its data, pulls the latest image and restarts it.
+The updater detects HomeLab Griller LXCs automatically, asks for confirmation, **downloads the new image before stopping** the app, backs up data and restarts the container. If GHCR is unreachable, the running installation stays online.
+
+## Optional stock & ingredient planning
+
+For each event, the admin can optionally enable **Stock & planning**. A small BBQ works as before with unlimited ordering, while larger events can track real quantities:
+
+1. Under **Admin → Ingredients & Extras**, create reusable ingredients such as *Beef Patty*, *Burger Bun* and *Cheese*.
+2. Under **Admin → Products**, edit a burger and set its **required recipe** to one Patty and one Bun per burger. Add cheese as an **optional topping** if applicable.
+3. Under **Admin → Events → Edit → Stock & planning**, enable inventory for the event and enter quantities, e.g. **10 Patty, 15 Bun, 8 Cheese**. Empty fields mean unlimited; `0` means out of stock.
+4. Guests can only order as many burgers as the available required ingredients allow. Sold-out products and toppings are disabled with a message to ask the host; availability refreshes periodically without resetting the order wizard.
+5. A submitted order reserves stock immediately. Editing or cancelling a pending order updates the reserved quantities automatically. The grill master can replenish stock during the event. **Completed orders remain consumed** (they do not replenish stock).
+
+**Shared ingredients:** If two burgers both use Patty, they share the same stock. You can also set a separate cap per product. The system validates stock atomically when orders are submitted, preventing two simultaneous guests from ordering the last serving. Cloned events copy the configured quantities but start with no orders/reservations. Recipe changes do not alter reservations of previously submitted orders. Existing v1/v2 orders are accounted for when enabling inventory for an older event.
 
 ## Optional HTTPS
 
@@ -90,6 +102,7 @@ Open `https://SERVER-IP:8443` or use the domain covered by your certificate. The
 ## What can it do?
 
 - Event QR codes, reusable guest PINs, custom menus and ingredient groups
+- Optional event stock control, per-product required recipes, shared ingredient limits and live sold-out status
 - Guided mobile orders; edit or cancel before preparation begins
 - Per-order ready progress and live status without page reload
 - Grill-master Kanban with search, colored lanes, drag-and-drop for mouse **and touch**, plus status buttons
@@ -102,7 +115,7 @@ Open `https://SERVER-IP:8443` or use the domain covered by your certificate. The
 
 ## Releases
 
-Release tags such as `v2.0.0-beta.3` publish the Docker image and attach **FULL ZIP** and **UPDATE ZIP** for source installations. Docker/Proxmox users should update by pulling the container, **not** by replacing files inside it.
+Release tags such as `v2.0.0-beta.4` publish the Docker image and attach **FULL ZIP** and **UPDATE ZIP** for source installations. Docker/Proxmox users should update by pulling the container, **not** by replacing files inside it.
 
 **Upgrading from v1 / early v2:** back up the existing `data` directory and read [UPGRADE-v1-to-v2.md](UPGRADE-v1-to-v2.md). Do not delete your database. Test on a copy first.
 
