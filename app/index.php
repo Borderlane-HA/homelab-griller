@@ -338,12 +338,13 @@ function render_footer(): void {
         $txt=setting('footer_text',t('footer'));
         echo '<footer class="footer"><div class="container">' . nl2br(h($txt));
         if(setting('footer_show_version','0')==='1'){
-            $version=is_file(__DIR__.'/VERSION')?trim((string)file_get_contents(__DIR__.'/VERSION')):'2.0.0-beta.2';
+            $version=is_file(__DIR__.'/VERSION')?trim((string)file_get_contents(__DIR__.'/VERSION')):'2.0.0-beta.3';
             echo ' <span class="footer-version">v' . h($version) . '</span>';
         }
         echo '</div></footer>';
     }
-    echo '<script defer src="assets/app.js"></script></body></html>';
+    $assetVersion = is_file(__DIR__ . '/VERSION') ? trim((string)file_get_contents(__DIR__ . '/VERSION')) : '2.0.0-beta.3';
+    echo '<script defer src="assets/app.js?v=' . h(rawurlencode($assetVersion)) . '"></script></body></html>';
 }
 function admin_tabs(): void {
     echo '<div class="admin-tabs">';

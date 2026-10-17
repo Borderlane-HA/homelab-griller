@@ -59,7 +59,8 @@
       if (step === 3) review();
       if (userNavigation && step > 1) wizard.scrollIntoView({ behavior: 'smooth', block: 'start' });
     };
-    wizard.querySelectorAll('[data-category]').forEach(button => button.addEventListener('click', () => {
+    // Only category navigation buttons change wizard steps. Product cards also carry data-category for filtering.
+    wizard.querySelectorAll('.category-pill[data-category]').forEach(button => button.addEventListener('click', () => {
       activeCategory = button.dataset.category;
       show(2, true);
     }));

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.0.0-beta.3
+
+- Fix guest order wizard scrolling to the top when selecting ingredients, quantities, doneness or notes: category click handler is now bound only to category navigation buttons.
+- Version the guest JavaScript asset URL to avoid serving a cached, buggy script after container updates.
+
 ## 2.0.0-beta.2
 
 - First-run admin account without log token; minimum password length 6
