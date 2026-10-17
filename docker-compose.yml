@@ -5,6 +5,8 @@ services:
     restart: unless-stopped
     ports:
       - "8091:80"
+      # Uncomment to expose HTTPS (self-signed by default):
+      # - "8443:443"
     environment:
       TZ: Europe/Berlin
       GRILLER_DEFAULT_LANGUAGE: de

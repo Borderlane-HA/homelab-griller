@@ -1,16 +1,14 @@
 # HomeLab Griller by Pengu
 
-**Scan. Choose. Grill. Enjoy.** A self-hosted, mobile-first BBQ event and guest ordering app for parties, family gatherings and HomeLabs.
+**Scan. Choose. Grill. Enjoy.** A self-hosted BBQ guest and order management app designed for mobile phones and private events.
 
-![HomeLab Griller v2 concept preview](docs/social-preview.png)
+![HomeLab Griller promotional artwork](docs/social-preview.png)
 
-HomeLab Griller makes grilling for a group much easier. The host creates an event and a menu, chooses which ingredients are available, and shares the event's QR code. Guests open it on their phones, customize burgers, sides and drinks, and place their orders. A clear grill-master board shows **who needs what, and what is ready** — even with 50 guests.
+Create a BBQ event, choose the available burgers, sides, drinks and ingredients, and share the event's QR code. Guests join from their phones, customize meals and send orders. The grill master sees each guest's requests, can drag orders between preparation stages and marks food ready. Designed to stay easy to use even for parties with **50 guests**.
 
-> **Network recommendation:** Host on a dedicated **guest VLAN/network** or another carefully restricted local network, with only the application port (default **8091**) reachable from guest devices. Many guest Wi-Fi configurations use client isolation: explicitly allow access to the Griller host. Restrict guests from reaching Proxmox, Docker management, NAS and other internal services. The app is intended for **private/LAN use**, not direct public Internet exposure. Use HTTPS if accessing across untrusted networks.
+> **Private network recommended:** Host HomeLab Griller on a separate **guest network / VLAN** or a restricted local network. Allow guests access **only to the app**, not to Proxmox, Docker management or private HomeLab services. Guest Wi-Fi client isolation may require a firewall exception to reach the app. Complete the **initial admin setup immediately** on a trusted network. Do not expose the first-run setup page to the public Internet.
 
 ## Docker — install
-
-Create a directory and a `compose.yml`:
 
 ```bash
 mkdir -p homelab-griller/data && cd homelab-griller
@@ -25,6 +23,8 @@ services:
     restart: unless-stopped
     ports:
       - "8091:80"
+      # Optional HTTPS (self-signed by default):
+      # - "8443:443"
     environment:
       TZ: Europe/Berlin
       GRILLER_DEFAULT_LANGUAGE: de
@@ -34,21 +34,20 @@ services:
 
 ```bash
 docker compose up -d
-docker compose logs --tail=30 homelab-griller
 ```
 
-Open **`http://YOUR-SERVER-IP:8091`**. On the first visit, choose your admin username and password in the browser. Enter the **one-time setup token** displayed in the container logs. Password must contain at least 12 characters. The token becomes invalid after setup.
+Open **`http://SERVER-IP:8091`** and complete the browser first-run setup. Choose your own admin username, password (**at least 6 characters**) and theme. **No installation-log token is needed.**
 
 ## Docker — update
 
-Run in your Compose directory:
+From the Compose directory:
 
 ```bash
 docker compose pull
 docker compose up -d
 ```
 
-Data is stored in `./data`, outside the container. **Back it up before updates.** For a consistent SQLite backup, stop the container temporarily:
+Your database and uploaded language packs are in `./data`. Back them up before any update (stop the container for a consistent SQLite copy):
 
 ```bash
 docker compose down
@@ -58,72 +57,57 @@ docker compose up -d
 
 ## Proxmox VE — install
 
-Run **on the Proxmox host** (creates a Debian LXC with Docker):
+Run **on the Proxmox host** (installs Debian LXC + Docker):
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Borderlane-HA/homelab-griller/main/scripts/proxmox-lxc-install.sh)"
 ```
 
-The installer asks for the container ID, hostname, storage, bridge, DHCP/static network settings and app port (**8091** by default). It prints the **LXC root password** and **web setup token** at the end. Open the displayed URL and create your admin credentials in the first-run wizard.
-
-Docker inside an LXC requires nesting and may depend on your host's kernel/storage setup. For maximum isolation and compatibility, a small Debian VM is an alternative.
+Choose a free CT ID, hostname, storage, network bridge, DHCP/static IP and application port (default **8091**). The installer displays the **LXC root password** at the end. Open the displayed application URL and create the admin credentials in the browser. For full Docker compatibility, a small Debian VM is another supported deployment approach.
 
 ## Proxmox VE — update
 
-On the **Proxmox host**, run:
+Run on the **Proxmox host**:
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Borderlane-HA/homelab-griller/main/scripts/proxmox-lxc-update.sh)"
 ```
 
-Enter the LXC ID you installed. The updater stops the app briefly, backs up `/opt/homelab-griller/data` to `/opt/homelab-griller/backups/`, pulls the latest container image and starts it again.
+Enter your CT ID. The updater stops the application briefly, backs up its data, pulls the latest image and restarts it.
+
+## Optional HTTPS
+
+Container port **443** supports HTTPS. To expose it, uncomment **`8443:443`** in Compose and run `docker compose up -d`. Proxmox installations expose port **8443** by default.
+
+HTTPS initially uses a **self-signed certificate** (your browser will warn). In **Admin → Settings → HTTPS**, upload your own PEM certificate/fullchain and its matching private key, then restart the container:
+
+```bash
+docker compose restart homelab-griller
+```
+
+Open `https://SERVER-IP:8443` or use the domain covered by your certificate. The uploaded key is stored persistently in `./data/tls/` (not in the public web directory). You can alternatively use a trusted reverse proxy for HTTPS termination.
 
 ## What can it do?
 
-- QR-code guest join, reusable guest profiles with optional four-digit PIN
-- Guided mobile ordering, quantities, toppings, notes and beef doneness
-- Guests can edit or cancel an order **only until preparation begins**
-- Live order status without resetting an unfinished menu
-- Grill-master board with search, queues, full-screen mode and automatic updates
-- Event creation, publishing, cloning and management of guests and orders
-- Reusable ingredient library and product/category management
-- **DE / EN / ES**, plus uploadable JSON language packs
-- Four themes: **Ember, Smokehouse, Summer Garden, Nordic**
-- Optional admin weather widget powered by [Open-Meteo](https://open-meteo.com/)
-- Local SQLite persistence, single-container deployment, multi-architecture Docker builds
+- Event QR codes, reusable guest PINs, custom menus and ingredient groups
+- Guided mobile orders; edit or cancel before preparation begins
+- Per-order ready progress and live status without page reload
+- Grill-master Kanban with search, colored lanes, drag-and-drop for mouse **and touch**, plus status buttons
+- Today's events at the top of the admin dashboard, event cloning and full administration
+- Four themes, **German / English / Spanish**, uploadable JSON language packs
+- Open-Meteo hourly weather cache, place search and event-day forecasts
+- Editable footer text, page visibility and optional version display
+- Admin first-run account setup; optional HTTPS with uploaded certificates
+- SQLite storage; single Docker container; multi-architecture GHCR images
 
-## Screenshots
+## Releases
 
-Actual v2 screenshots can be added to `docs/screenshots/` and linked here:
+Release tags such as `v2.0.0-beta.2` publish the Docker image and attach **FULL ZIP** and **UPDATE ZIP** for source installations. Docker/Proxmox users should update by pulling the container, **not** by replacing files inside it.
 
-| View | Image |
-| --- | --- |
-| Mobile guest ordering | `docs/screenshots/guest-wizard.png` |
-| Guest order status | `docs/screenshots/guest-status.png` |
-| Grill-master display | `docs/screenshots/kitchen-board.png` |
-| Admin / event setup | `docs/screenshots/admin-dashboard.png` |
+**Upgrading from v1 / early v2:** back up the existing `data` directory and read [UPGRADE-v1-to-v2.md](UPGRADE-v1-to-v2.md). Do not delete your database. Test on a copy first.
 
-*The banner above is a conceptual promotional illustration, not a screenshot of a running installation.*
+## License
 
-## Releases and upgrades
+[PolyForm Noncommercial License 1.0.0](LICENSE) — source available for permitted **noncommercial use**. This license is **not an OSI-approved open-source license**. Earlier versions already published under MIT remain available under their original terms; relicensing a new release does not revoke prior grants.
 
-GitHub Actions publishes a multi-arch GHCR image (`linux/amd64`, `linux/arm64`, `linux/arm/v7`). A Git tag such as `v2.0.0-beta.1` also triggers a GitHub release containing:
-
-- **Full ZIP:** entire source tree for new source installations
-- **Update ZIP:** files changed from the preceding Git tag (source installations only)
-
-Users deploying with Docker or Proxmox should follow the **update commands above**, not unpack ZIP files into the running container.
-
-**Upgrading from v1?** Make a backup of your existing `data` directory. v2 preserves the prior SQLite data and adds settings and reusable ingredients during startup. v1's `GRILLER_ADMIN_PASSWORD` variable is no longer used for login: create your administrator account in the first-run setup after the upgrade. **Test on a copy of your data before replacing a production installation.**
-
-## Development
-
-- PHP 8.3 + Apache + SQLite, no external DB or npm build required
-- Source code: `app/`; deployment: `Dockerfile`, `docker-compose.yml`
-- Language packs: `app/lang/*.json`; additional packs are uploaded in Admin → Languages
-- Admin credentials are stored as a password hash in the SQLite DB; a random setup token is generated separately and printed only in the container logs
-- Version: [`VERSION`](VERSION)
-
-Licensed under [MIT](LICENSE).
-
-> **Privacy note:** The optional four-digit guest PIN is a convenience feature for recognizing returning guests, **not strong authentication**. Use the application only on a controlled local network.
+*Promotional banner is a concept illustration, not a screenshot of the live application.*

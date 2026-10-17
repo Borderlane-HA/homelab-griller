@@ -6,6 +6,7 @@ ini_set('session.cookie_httponly','1');
 ini_set('session.cookie_samesite','Lax');
 if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {ini_set('session.cookie_secure','1');}
 session_start();
+@date_default_timezone_set(getenv('TZ') ?: 'Europe/Berlin');
 
 const ADMIN_USER = 'Griller';
 const DATA_DIR = __DIR__ . '/data';
@@ -232,16 +233,6 @@ function put_setting(string $key, string $value): void {
     db()->prepare('INSERT INTO app_settings(setting_key,setting_value) VALUES(?,?) ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value')->execute([$key,$value]);
 }
 function setup_required(): bool { return setting('admin_hash') === ''; }
-function bootstrap_token(): string {
-    $token = (string)getenv('GRILLER_SETUP_TOKEN');
-    if ($token !== '') { return $token; }
-    $file = DATA_DIR . '/setup-token';
-    if (!is_file($file)) {
-        file_put_contents($file, bin2hex(random_bytes(12)), LOCK_EX);
-        chmod($file, 0600);
-    }
-    return trim((string)file_get_contents($file));
-}
 function admin_username(): string { return setting('admin_username', 'Griller'); }
 function admin_password_valid(string $value): bool {
     $hash = setting('admin_hash');
@@ -334,11 +325,26 @@ function render_header(string $title = ''): void {
     echo '</select></form>';
     echo '<a class="btn ghost small home-link" href="' . h(route('home')) . '">' . h(t('home')) . '</a>';
     if (is_admin()) { echo '<a class="btn dark small" href="' . h(route('admin')) . '">' . h(t('admin')) . '</a><a class="btn ghost small" href="' . h(route('admin_logout')) . '">' . h(t('logout')) . '</a>'; }
-    else { echo '<a class="btn dark small" href="' . h(route('admin_login')) . '">' . h(t('admin')) . '</a>'; }
+    else { echo '<a class="btn dark small" href="' . h(route(is_admin()?'admin':'admin_login')) . '">' . h(t('admin')) . '</a>'; }
     echo '</nav></div></header><main class="container">';
     $f = flash(); if ($f) { echo '<div class="notice ' . h($f[1]) . '">' . h($f[0]) . '</div>'; }
 }
-function render_footer(): void { echo '</main><footer class="footer"><div class="container">' . h(t('footer')) . '</div></footer><script defer src="assets/app.js"></script></body></html>'; }
+function render_footer(): void {
+    $routeName=(string)($_GET['r']??'home');
+    $section= $routeName==='home'?'home':($routeName==='event'?'guest':($routeName==='admin_kitchen'?'kitchen':'admin'));
+    $allowed=explode(',',setting('footer_pages','home,guest,admin,kitchen'));
+    echo '</main>';
+    if(in_array($section,$allowed,true)){
+        $txt=setting('footer_text',t('footer'));
+        echo '<footer class="footer"><div class="container">' . nl2br(h($txt));
+        if(setting('footer_show_version','0')==='1'){
+            $version=is_file(__DIR__.'/VERSION')?trim((string)file_get_contents(__DIR__.'/VERSION')):'2.0.0-beta.2';
+            echo ' <span class="footer-version">v' . h($version) . '</span>';
+        }
+        echo '</div></footer>';
+    }
+    echo '<script defer src="assets/app.js"></script></body></html>';
+}
 function admin_tabs(): void {
     echo '<div class="admin-tabs">';
     echo '<a class="btn ghost small" href="' . h(route('admin')) . '">' . h(t('events')) . '</a>';
@@ -571,7 +577,7 @@ function page_home(): void {
     $pdo = db();
     $events = $pdo->query("SELECT * FROM events WHERE status = 'public' ORDER BY COALESCE(event_date,'9999-12-31'), created_at DESC")->fetchAll();
     render_header();
-    echo '<section class="hero"><div><span class="eyebrow">SCAN · ORDER · ENJOY</span><h1>' . h(t('hero_title')) . '</h1><p>' . h(t('hero_subtitle')) . '</p><div class="split-actions"><a class="btn primary" href="' . h(route('admin_login')) . '">' . h(t('admin')) . '</a><a class="btn ghost" href="#events">' . h(t('open_events')) . '</a></div></div><div class="hero-card"><img src="assets/hero-grill.svg" alt=""></div></section>';
+    echo '<section class="hero"><div><span class="eyebrow">SCAN · ORDER · ENJOY</span><h1>' . h(t('hero_title')) . '</h1><p>' . h(t('hero_subtitle')) . '</p><div class="split-actions"><a class="btn primary" href="' . h(route(is_admin()?'admin':'admin_login')) . '">' . h(t('admin')) . '</a><a class="btn ghost" href="#events">' . h(t('open_events')) . '</a></div></div><div class="hero-card"><img src="assets/hero-grill.svg" alt=""></div></section>';
     echo '<section id="events" class="section"><div class="section-title"><h2>' . h(t('open_events')) . '</h2></div>';
     if (!$events) { echo '<div class="empty">' . h(t('no_public_events')) . '</div>'; }
     else {
@@ -579,7 +585,7 @@ function page_home(): void {
         foreach ($events as $e) {
             echo '<article class="card solid"><span class="pill public">' . h(t('public')) . '</span><h3 style="margin-top:14px">' . h($e['title']) . '</h3>';
             if ($e['event_date']) { echo '<p class="muted">' . h(t('event_date')) . ': ' . h($e['event_date']) . '</p>'; }
-            if ($e['description']) { echo '<p>' . nl2br(h($e['description'])) . '</p>'; }
+            if ($e['description']) { echo '<p>' . nl2br(h($e['description'])) . '</p>'; } echo weather_day_badge($e['event_date']);
             echo '<a class="btn primary" href="' . h(route('event', ['slug' => $e['slug']])) . '">' . h(t('join_event')) . '</a></article>';
         }
         echo '</div>';
@@ -592,15 +598,13 @@ function page_setup(): void {
     if (!setup_required()) { redirect_to('admin_login'); }
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         verify_csrf();
-        $token=(string)($_POST['setup_token']??'');
         $username=trim((string)($_POST['username']??'Griller'));
         $password=(string)($_POST['password']??'');
-        if (hash_equals(bootstrap_token(), $token) && preg_match('/^[\p{L}\p{N}_.-]{3,32}$/u',$username) && strlen($password)>=12 && hash_equals($password,(string)($_POST['password_confirm']??''))) {
+        if (preg_match('/^[\p{L}\p{N}_.-]{3,32}$/u',$username) && preg_match_all('/./us',$password)>=6 && hash_equals($password,(string)($_POST['password_confirm']??''))) {
             put_setting('admin_username',$username);
             put_setting('admin_hash',password_hash($password,PASSWORD_DEFAULT));
             put_setting('theme',in_array($_POST['theme']??'', ['ember','smoke','garden','nordic'],true)?$_POST['theme']:'ember');
             $_SESSION['admin']=true;
-            @unlink(DATA_DIR.'/setup-token');
             file_put_contents(DATA_DIR.'/admin-configured','1');
             session_regenerate_id(true);
             redirect_to('admin');
@@ -608,10 +612,11 @@ function page_setup(): void {
         flash(t('setup_invalid'),'bad'); redirect_to('setup');
     }
     render_header(t('setup_title'));
-    echo '<section class="section setup-page"><div class="card setup-card"><span class="eyebrow">HOMELAB GRILLER · V2</span><h1>' . h(t('setup_title')) . '</h1><p class="muted">' . h(t('setup_hint')) . '</p><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><div class="field"><label>' . h(t('setup_token')) . '</label><input required name="setup_token" autocomplete="off" autocapitalize="off"></div><div class="field"><label>' . h(t('username')) . '</label><input required name="username" value="Griller" minlength="3" maxlength="32"></div><div class="field"><label>' . h(t('password')) . ' (12+)</label><input required minlength="12" type="password" name="password" autocomplete="new-password"></div><div class="field"><label>' . h(t('confirm_password')) . '</label><input required minlength="12" type="password" name="password_confirm" autocomplete="new-password"></div><div class="field"><label>' . h(t('theme')) . '</label><select name="theme"><option value="ember">Ember</option><option value="smoke">Smokehouse</option><option value="garden">Summer Garden</option><option value="nordic">Nordic</option></select></div><button class="primary" type="submit">' . h(t('finish_setup')) . '</button></form></div></section>';
+    echo '<section class="section setup-page"><div class="card setup-card"><span class="eyebrow">HOMELAB GRILLER · V2</span><h1>' . h(t('setup_title')) . '</h1><p class="muted">' . h(t('setup_hint')) . '</p><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><div class="field"><label>' . h(t('username')) . '</label><input required name="username" value="Griller" minlength="3" maxlength="32"></div><div class="field"><label>' . h(t('password')) . ' (6+)</label><input required minlength="6" type="password" name="password" autocomplete="new-password"></div><div class="field"><label>' . h(t('confirm_password')) . '</label><input required minlength="6" type="password" name="password_confirm" autocomplete="new-password"></div><div class="field"><label>' . h(t('theme')) . '</label><select name="theme"><option value="ember">Ember</option><option value="smoke">Smokehouse</option><option value="garden">Summer Garden</option><option value="nordic">Nordic</option></select></div><button class="primary" type="submit">' . h(t('finish_setup')) . '</button></form></div></section>';
     render_footer();
 }
 function page_admin_login(): void {
+    if (is_admin()) { redirect_to('admin'); }
     if (setup_required()) { redirect_to('setup'); }
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         verify_csrf();
@@ -628,6 +633,16 @@ function page_admin_login(): void {
 
 function page_admin_logout(): void { unset($_SESSION['admin']); redirect_to('home'); }
 
+function render_today_events(array $events): void {
+    $today=date('Y-m-d');$current=array_values(array_filter($events,static fn($event)=>$event['event_date']===$today && $event['status']!=='closed'));
+    if(!$current)return;
+    echo '<div class="today-events"><div class="section-title compact"><div><span class="eyebrow">TODAY · LIVE</span><h2>'.h(t('events_today')).'</h2></div><span class="pill public">'.count($current).'</span></div><div class="today-cards">';
+    foreach($current as $e){
+       echo '<a class="today-event-card" href="'.h(route('admin_kitchen',['id'=>$e['id']])).'"><span class="today-event-icon">🔥</span><span class="today-event-body"><strong>'.h($e['title']).'</strong><small>'.h($e['guest_count']).' '.h(t('guests')).' · '.h($e['item_count']).' '.h(t('items')).'</small>'.weather_day_badge($e['event_date']).'</span><span class="today-event-arrow">→</span></a>';
+    }
+    echo '</div></div>';
+}
+
 function page_admin(): void {
     require_admin();
     $pdo = db();
@@ -636,7 +651,7 @@ function page_admin(): void {
         $title = trim((string)($_POST['title'] ?? '')) ?: 'Grillevent';
         $slug = unique_slug($pdo, $title);
         $stmt = $pdo->prepare('INSERT INTO events(title,slug,event_date,description,status) VALUES(?,?,?,?,?)');
-        $stmt->execute([$title, $slug, $_POST['event_date'] ?: null, trim((string)($_POST['description'] ?? '')), 'draft']);
+        $stmt->execute([$title, $slug, $_POST['event_date'] ?: null, trim((string)($_POST['description'] ?? '')), 'public']);
         $eventId = (int)$pdo->lastInsertId();
         foreach ($pdo->query('SELECT id, sort_order FROM products WHERE active = 1') as $p) {
             $pdo->prepare('INSERT INTO event_products(event_id,product_id,sort_order,active) VALUES(?,?,?,1)')->execute([$eventId, $p['id'], $p['sort_order']]);
@@ -673,13 +688,13 @@ function page_admin(): void {
         }
         redirect_to('admin');
     }
-    $events = $pdo->query('SELECT e.*, COUNT(DISTINCT g.id) AS guest_count, COUNT(oi.id) AS item_count FROM events e LEFT JOIN guests g ON g.event_id=e.id LEFT JOIN orders o ON o.guest_id=g.id LEFT JOIN order_items oi ON oi.order_id=o.id GROUP BY e.id ORDER BY e.created_at DESC')->fetchAll();
+    $events = $pdo->query('SELECT e.*, COUNT(DISTINCT g.id) AS guest_count, COUNT(oi.id) AS item_count FROM events e LEFT JOIN guests g ON g.event_id=e.id LEFT JOIN orders o ON o.guest_id=g.id LEFT JOIN order_items oi ON oi.order_id=o.id GROUP BY e.id ORDER BY CASE WHEN e.event_date=date(\'now\',\'localtime\') THEN 0 ELSE 1 END, CASE WHEN e.event_date>=date(\'now\',\'localtime\') THEN 0 ELSE 1 END, e.event_date DESC,e.created_at DESC')->fetchAll();
     render_header(t('admin_dashboard'));
     $dashboardStats=$pdo->query("SELECT (SELECT COUNT(*) FROM guests) AS guests, (SELECT COUNT(*) FROM order_items WHERE status='pending') AS pending, (SELECT COUNT(*) FROM order_items WHERE status='in_progress') AS in_progress, (SELECT COUNT(*) FROM order_items WHERE status='done') AS done")->fetch();
-    echo '<section class="section"><div class="section-title"><h2>' . h(t('admin_dashboard')) . '</h2></div>'; admin_tabs(); echo '<div class="queue-stats admin-kpis">';foreach(['guests'=>t('guests'),'pending'=>t('pending'),'in_progress'=>t('in_progress'),'done'=>t('done')] as $key=>$label){echo '<div class="queue-stat ' . h($key) . '"><span>' . h($label) . '</span><strong>' . h($dashboardStats[$key]) . '</strong></div>';}echo '</div>'; page_weather_widget(); echo '<div class="grid cols-2"><div class="card"><h3>' . h(t('new_event')) . '</h3><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="create_event"><div class="field"><label>' . h(t('title')) . '</label><input name="title" required placeholder="Sommer BBQ"></div><div class="field"><label>' . h(t('event_date')) . '</label><input name="event_date" type="date"></div><div class="field"><label>' . h(t('description')) . '</label><textarea name="description" placeholder="Hinweise für Gäste"></textarea></div><input class="primary" type="submit" value="' . h(t('create')) . '"></form></div><div class="card"><h3>' . h(t('events')) . '</h3><p class="muted">' . h(t('public_hint')) . '</p><p class="muted">' . h(t('guests_hint')) . '</p></div></div>';
+    echo '<section class="section"><div class="section-title"><h2>' . h(t('admin_dashboard')) . '</h2></div>'; admin_tabs(); echo '<div class="queue-stats admin-kpis">';foreach(['guests'=>t('guests'),'pending'=>t('pending'),'in_progress'=>t('in_progress'),'done'=>t('done')] as $key=>$label){echo '<div class="queue-stat ' . h($key) . '"><span>' . h($label) . '</span><strong>' . h($dashboardStats[$key]) . '</strong></div>';}echo '</div>'; page_weather_widget();render_today_events($events); echo '<div class="grid cols-2"><div class="card"><h3>' . h(t('new_event')) . '</h3><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="create_event"><div class="field"><label>' . h(t('title')) . '</label><input name="title" required placeholder="Sommer BBQ"></div><div class="field"><label>' . h(t('event_date')) . '</label><input name="event_date" type="date" value="' . h(date('Y-m-d')) . '"></div><div class="field"><label>' . h(t('description')) . '</label><textarea name="description" placeholder="Hinweise für Gäste"></textarea></div><input class="primary" type="submit" value="' . h(t('create')) . '"></form></div><div class="card"><h3>' . h(t('events')) . '</h3><p class="muted">' . h(t('public_hint')) . '</p><p class="muted">' . h(t('guests_hint')) . '</p></div></div>';
     echo '<div class="section"><div class="table-wrap"><table><thead><tr><th>' . h(t('title')) . '</th><th>' . h(t('event_date')) . '</th><th>' . h(t('status')) . '</th><th>' . h(t('guests')) . '</th><th>' . h(t('actions')) . '</th></tr></thead><tbody>';
     foreach ($events as $e) {
-        echo '<tr><td><strong>' . h($e['title']) . '</strong><br><span class="muted">/' . h($e['slug']) . '</span></td><td>' . h($e['event_date'] ?: '-') . '</td><td><span class="pill ' . h($e['status']) . '">' . h(status_label($e['status'])) . '</span></td><td><strong>' . h((string)$e['guest_count']) . '</strong><br><span class="muted">' . h(t('orders')) . ': ' . h((string)$e['item_count']) . '</span></td><td class="nowrap"><div class="split-actions"><a class="btn small primary" href="' . h(route('admin_event', ['id' => $e['id']])) . '">' . h(t('edit')) . '</a><a class="btn small green" href="' . h(route('admin_kitchen', ['id' => $e['id']])) . '">' . h(t('kitchen')) . '</a><form class="inline-form" method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="clone_event"><input type="hidden" name="id" value="' . h($e['id']) . '"><button class="btn small ghost" type="submit">' . h(t('clone')) . '</button></form><form class="inline-form" method="post" onsubmit="return confirm(\'' . h(t('confirm_delete_event')) . '\')"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="delete_event"><input type="hidden" name="id" value="' . h($e['id']) . '"><button class="btn small red" type="submit">' . h(t('delete')) . '</button></form></div></td></tr>';
+        echo '<tr><td><a class="event-name-link" href="' . h(route('admin_kitchen',['id'=>$e['id']])) . '">' . h($e['title']) . ' →</a><br><span class="muted">/' . h($e['slug']) . '</span></td><td>' . h($e['event_date'] ?: '-') . weather_day_badge($e['event_date']) . '</td><td><span class="pill ' . h($e['status']) . '">' . h(status_label($e['status'])) . '</span></td><td><strong>' . h((string)$e['guest_count']) . '</strong><br><span class="muted">' . h(t('orders')) . ': ' . h((string)$e['item_count']) . '</span></td><td class="nowrap"><div class="split-actions"><a class="btn small primary" href="' . h(route('admin_event', ['id' => $e['id']])) . '">' . h(t('edit')) . '</a><a class="btn small green" href="' . h(route('admin_kitchen', ['id' => $e['id']])) . '">' . h(t('kitchen')) . '</a><form class="inline-form" method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="clone_event"><input type="hidden" name="id" value="' . h($e['id']) . '"><button class="btn small ghost" type="submit">' . h(t('clone')) . '</button></form><form class="inline-form" method="post" onsubmit="return confirm(\'' . h(t('confirm_delete_event')) . '\')"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="delete_event"><input type="hidden" name="id" value="' . h($e['id']) . '"><button class="btn small red" type="submit">' . h(t('delete')) . '</button></form></div></td></tr>';
     }
     echo '</tbody></table></div></div></section>';
     render_footer();
@@ -924,8 +939,29 @@ function page_admin_settings(): void {
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         verify_csrf();
         $action=(string)($_POST['action']??'save');
+        if ($action==='tls_upload') {
+            $cert=$_FILES['tls_cert']??null;$key=$_FILES['tls_key']??null;
+            if(!$cert||!$key||$cert['error']!==UPLOAD_ERR_OK||$key['error']!==UPLOAD_ERR_OK
+              ||$cert['size']>262144||$key['size']>65536
+              ||!is_uploaded_file($cert['tmp_name'])||!is_uploaded_file($key['tmp_name'])){
+                flash(t('tls_upload_invalid'),'bad');redirect_to('admin_settings');
+            }
+            $certBytes=(string)file_get_contents($cert['tmp_name']);$keyBytes=(string)file_get_contents($key['tmp_name']);
+            $x509=@openssl_x509_read($certBytes);$private=@openssl_pkey_get_private($keyBytes);
+            if(!$x509 || !$private || !openssl_x509_check_private_key($x509,$private)){
+                flash(t('tls_upload_invalid'),'bad');redirect_to('admin_settings');
+            }
+            $dir=DATA_DIR.'/tls'; if(!is_dir($dir))mkdir($dir,0700,true);
+            $newCert=$dir.'/server.crt.tmp';$newKey=$dir.'/server.key.tmp';
+            if(file_put_contents($newCert,$certBytes,LOCK_EX)===false||file_put_contents($newKey,$keyBytes,LOCK_EX)===false){
+                flash(t('tls_upload_invalid'),'bad');redirect_to('admin_settings');
+            }
+            chmod($newCert,0600);chmod($newKey,0600);
+            rename($newCert,$dir.'/server.crt');rename($newKey,$dir.'/server.key');
+            flash(t('tls_upload_success'));redirect_to('admin_settings');
+        }
         if ($action==='password') {
-            if (!admin_password_valid((string)($_POST['current_password']??'')) || strlen((string)($_POST['new_password']??''))<12) {
+            if (!admin_password_valid((string)($_POST['current_password']??'')) || preg_match_all('/./us',(string)($_POST['new_password']??''))<6) {
                 flash(t('password_error'),'bad'); redirect_to('admin_settings');
             }
             put_setting('admin_hash',password_hash((string)$_POST['new_password'],PASSWORD_DEFAULT));
@@ -941,6 +977,10 @@ function page_admin_settings(): void {
             put_setting($key,$v);
         }
         put_setting('weather_city',substr(trim((string)($_POST['weather_city']??'')),0,80));
+        put_setting('footer_text',substr(trim((string)($_POST['footer_text']??'')),0,400));
+        put_setting('footer_show_version',isset($_POST['footer_show_version'])?'1':'0');
+        $pages=[];foreach(['home','guest','admin','kitchen'] as $page){if(in_array($page,(array)($_POST['footer_pages']??[]),true))$pages[]=$page;}
+        put_setting('footer_pages',implode(',',$pages));
         flash(t('settings_saved')); redirect_to('admin_settings');
     }
     render_header(t('settings')); echo '<section class="section"><div class="section-title"><h1>' . h(t('settings')) . '</h1></div>'; admin_tabs();
@@ -948,8 +988,14 @@ function page_admin_settings(): void {
     foreach(['ember'=>'Ember','smoke'=>'Smokehouse','garden'=>'Summer Garden','nordic'=>'Nordic'] as $key=>$label){echo '<label class="theme-swatch ' . h($key) . '"><input type="radio" name="theme" value="' . h($key) . '" ' . (setting('theme','ember')===$key?'checked':'') . '><span class="swatch"></span><strong>' . h($label) . '</strong></label>';}
     echo '</div></div><div class="field"><label>' . h(t('default_language')) . '</label><select name="default_language">';
     foreach(available_langs() as $code=>$name){echo '<option value="' . h($code) . '" ' . (setting('default_language','de')===$code?'selected':'') . '>' . h($name) . '</option>';}
-    echo '</select></div><h3>' . h(t('weather_widget')) . '</h3><p class="muted">' . h(t('weather_hint')) . '</p><div class="field"><label>' . h(t('weather_city')) . '</label><input name="weather_city" value="' . h(setting('weather_city')) . '" placeholder="Munich"></div><div class="form-row"><div class="field"><label>Latitude</label><input name="weather_lat" type="number" step="any" value="' . h(setting('weather_lat')) . '" placeholder="48.14"></div><div class="field"><label>Longitude</label><input name="weather_lon" type="number" step="any" value="' . h(setting('weather_lon')) . '" placeholder="11.58"></div></div><button class="primary" type="submit">' . h(t('save')) . '</button></form></div>';
-    echo '<div class="card"><h2>' . h(t('admin_access')) . '</h2><p class="muted">' . h(t('current_username')) . ': <b>' . h(admin_username()) . '</b></p><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="password"><div class="field"><label>' . h(t('current_password')) . '</label><input name="current_password" type="password" required></div><div class="field"><label>' . h(t('new_password')) . ' (12+)</label><input name="new_password" type="password" minlength="12" required></div><button type="submit" class="primary">' . h(t('change_password')) . '</button></form></div></div></section>';
+    echo '</select></div><h3>' . h(t('weather_widget')) . '</h3><p class="muted">' . h(t('weather_hint')) . '</p><div class="field"><label>' . h(t('weather_city')) . '</label><input id="weather-city" name="weather_city" value="' . h(setting('weather_city')) . '" placeholder="Munich"> <div class="place-search"><button type="button" class="btn ghost small" id="weather-city-search" data-url="' . h(route('weather_search_api')) . '">🔎 ' . h(t('search_city')) . '</button><div class="place-results" id="weather-place-results" aria-live="polite"></div></div></div><div class="form-row"><div class="field"><label>Latitude</label><input id="weather-lat" name="weather_lat" type="number" step="any" value="' . h(setting('weather_lat')) . '" placeholder="48.14"></div><div class="field"><label>Longitude</label><input id="weather-lon" name="weather_lon" type="number" step="any" value="' . h(setting('weather_lon')) . '" placeholder="11.58"></div></div><h3>' . h(t('footer_settings')) . '</h3><div class="field"><label>' . h(t('footer_text')) . '</label><textarea name="footer_text" rows="2" maxlength="400">' . h(setting('footer_text',t('footer'))) . '</textarea></div><label class="check-chip"><input type="checkbox" name="footer_show_version" ' . (setting('footer_show_version','0')==='1'?'checked':'') . '> ' . h(t('footer_show_version')) . '</label><p class="muted">' . h(t('footer_pages')) . '</p><div class="footer-page-options">';
+    foreach(['home'=>t('home'),'guest'=>t('guests'),'admin'=>t('admin'),'kitchen'=>t('kitchen')] as $key=>$label){echo '<label class="check-chip"><input type="checkbox" name="footer_pages[]" value="' . h($key) . '" ' . (in_array($key,explode(',',setting('footer_pages','home,guest,admin,kitchen')),true)?'checked':'') . '> ' . h($label) . '</label>';}
+    echo '</div><br><button class="primary" type="submit">' . h(t('save')) . '</button></form></div>';
+    echo '<div class="card"><h2>' . h(t('admin_access')) . '</h2><p class="muted">' . h(t('current_username')) . ': <b>' . h(admin_username()) . '</b></p><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="password"><div class="field"><label>' . h(t('current_password')) . '</label><input name="current_password" type="password" required></div><div class="field"><label>' . h(t('new_password')) . ' (6+)</label><input name="new_password" type="password" minlength="6" required></div><button type="submit" class="primary">' . h(t('change_password')) . '</button></form></div></div></section>';
+    echo '<div class="section"><div class="card"><h2>🔒 ' . h(t('tls_title')) . '</h2><p class="muted">' . h(t('tls_hint')) . '</p>';
+    $uploaded=is_file(DATA_DIR.'/tls/server.crt');
+    echo '<p class="pill ' . ($uploaded?'public':'draft') . '">' . h($uploaded?t('tls_uploaded'):t('tls_default')) . '</p>';
+    echo '<form method="post" enctype="multipart/form-data"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="tls_upload"><div class="grid cols-2"><div class="field"><label>' . h(t('tls_cert')) . '</label><input type="file" name="tls_cert" accept=".pem,.crt,.txt" required></div><div class="field"><label>' . h(t('tls_key')) . '</label><input type="file" name="tls_key" accept=".pem,.key,.txt" required></div></div><button type="submit" class="primary">' . h(t('tls_upload')) . '</button></form><p class="muted tls-note">' . h(t('tls_restart')) . '</p></div></div>';
     render_footer();
 }
 function page_admin_ingredients(): void {
@@ -993,20 +1039,105 @@ function page_admin_guests(): void {
     else {echo '<div class="admin-item-list">';foreach($profiles as $pr){echo '<div class="admin-sort-item"><div style="flex:1"><strong>' . h($pr['name']) . '</strong><p class="muted">' . h($pr['event_count']) . ' ' . h(t('events')) . ' · ' . h($pr['order_count']) . ' ' . h(t('orders')) . '</p></div><form method="post" onsubmit="return confirm(' . h(json_encode(t('confirm_delete_profile'))) . ')"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="profile_id" value="' . h($pr['id']) . '"><button class="btn red small" type="submit">' . h(t('delete')) . '</button></form></div>';}echo '</div>';}
     echo '</section>';render_footer();
 }
-function page_weather_widget(): void {
+function weather_data(): ?array {
+    static $loaded=false,$weather=null;
+    if($loaded) return $weather;
+    $loaded=true;
     $lat=setting('weather_lat'); $lon=setting('weather_lon');
-    if ($lat==='' || $lon==='') { return; }
-    $cache=DATA_DIR.'/weather-cache.json'; $data=null;
-    if(is_file($cache) && time()-filemtime($cache)<900){$data=json_decode((string)file_get_contents($cache),true);}
-    if (!is_array($data)) {
-        $url='https://api.open-meteo.com/v1/forecast?latitude='.rawurlencode($lat).'&longitude='.rawurlencode($lon).'&current=temperature_2m,wind_speed_10m,precipitation&timezone=auto';
-        $ctx=stream_context_create(['http'=>['timeout'=>2,'user_agent'=>'HomeLabGriller/2.0']]);
-        $raw=@file_get_contents($url,false,$ctx); $fresh=$raw?json_decode($raw,true):null;
-        if(is_array($fresh) && isset($fresh['current'])){$data=$fresh;file_put_contents($cache,$raw);}
+    if(!is_numeric($lat)||!is_numeric($lon)||(float)$lat>90||(float)$lat< -90||(float)$lon>180||(float)$lon< -180)return null;
+    $cache=DATA_DIR.'/weather-cache-v2.json';$raw='';
+    $coordinates=round((float)$lat,5).','.round((float)$lon,5);
+    if(is_file($cache)){
+        $saved=json_decode((string)file_get_contents($cache),true);
+        if(is_array($saved)&&($saved['_coordinates']??'')===$coordinates){
+            $weather=$saved;
+            if(time()-filemtime($cache)<3600)return $weather;
+        }
     }
-    if (isset($data['current'])) {
-        $w=$data['current']; echo '<div class="weather-mini"><span class="weather-emoji">☀</span><div><strong>' . h(setting('weather_city',t('weather_widget'))) . '</strong><small>' . h(t('weather_widget')) . '</small></div><strong class="weather-temp">' . h(round((float)($w['temperature_2m']??0))) . '°</strong><small>' . h($w['wind_speed_10m']??'-') . ' km/h · ' . h($w['precipitation']??'-') . ' mm</small></div>';
+    $retry=DATA_DIR.'/weather-last-attempt';
+    // Avoid a stampede of outbound calls when the weather service is unavailable.
+    if(is_file($retry) && time()-filemtime($retry)<300)return $weather;
+    @file_put_contents($retry,(string)time(),LOCK_EX);
+    $url='https://api.open-meteo.com/v1/forecast?latitude='.rawurlencode($lat).'&longitude='.rawurlencode($lon)
+       .'&current=temperature_2m,wind_speed_10m,precipitation,weather_code'
+       .'&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_speed_10m_max,sunshine_duration,weather_code'
+       .'&hourly=temperature_2m,precipitation_probability,wind_speed_10m,weather_code'
+       .'&timezone=auto&forecast_days=16';
+    $ctx=stream_context_create(['http'=>['timeout'=>4,'user_agent'=>'HomeLabGriller/2.0']]);
+    $fresh=@file_get_contents($url,false,$ctx);
+    $value=$fresh?json_decode($fresh,true):null;
+    if(is_array($value)&&isset($value['daily']['time'],$value['current'])){
+        $value['_coordinates']=$coordinates;
+        $weather=$value;
+        @file_put_contents($cache,json_encode($value),LOCK_EX);
     }
+    return $weather;
+}
+function weather_icon(int $code): string {
+    if($code===0)return '☀️';
+    if($code<=3)return '⛅';
+    if($code<=48)return '🌫️';
+    if($code<=67)return '🌧️';
+    if($code<=77)return '🌨️';
+    if($code<=82)return '🌦️';
+    return '⛈️';
+}
+function weather_day(string $day): ?array {
+    $w=weather_data();
+    if(!$w || !preg_match('/^\d{4}-\d{2}-\d{2}$/',$day))return null;
+    $index=array_search($day,$w['daily']['time']??[],true);
+    if($index===false)return null;
+    $d=$w['daily'];
+    return [
+        'icon'=>weather_icon((int)($d['weather_code'][$index]??3)),
+        'min'=>(int)round((float)($d['temperature_2m_min'][$index]??0)),
+        'max'=>(int)round((float)($d['temperature_2m_max'][$index]??0)),
+        'rain'=>(int)($d['precipitation_probability_max'][$index]??0),
+        'wind'=>(int)round((float)($d['wind_speed_10m_max'][$index]??0)),
+        'sun'=>(int)round((float)($d['sunshine_duration'][$index]??0)/3600),
+    ];
+}
+function weather_day_badge(?string $day,bool $withTitle=false): string {
+    if(!$day || !($w=weather_day($day)))return '';
+    $label=$withTitle?'<span class="muted">'.h(t('weather_forecast')).'</span> ':'';
+    return '<div class="forecast-mini">'.$label.'<span aria-hidden="true">'.$w['icon'].'</span> <strong>'.$w['min'].'–'.$w['max'].'°C</strong> <span>☔ '.$w['rain'].'%</span> <span>🌬 '.$w['wind'].' km/h</span></div>';
+}
+function page_weather_widget(): void {
+    $w=weather_data();if(!$w)return;
+    $today=weather_day(date('Y-m-d'));$current=$w['current'];
+    echo '<div class="weather-mini"><span class="weather-emoji">'.weather_icon((int)($current['weather_code']??3)).'</span><div><strong>'.h(setting('weather_city',t('weather_widget'))).'</strong><small>'.h(t('weather_widget')).' · '.h(t('weather_hourly_update')).'</small></div><strong class="weather-temp">'.h(round((float)($current['temperature_2m']??0))).'°</strong><small>'.h((int)round((float)($current['wind_speed_10m']??0))).' km/h · '.h($current['precipitation']??0).' mm'.($today?' · ☔ '.$today['rain'].'%':'').'</small></div>';
+}
+function page_event_weather(array $event): void {
+    if(empty($event['event_date']) || !($day=weather_day($event['event_date'])))return;
+    echo '<div class="card weather-event-card"><div class="section-title compact"><h3>'.h(t('weather_forecast')).' · '.h($event['event_date']).'</h3><span class="pill">'.h(setting('weather_city')).'</span></div>';
+    echo '<div class="forecast-kpis"><span class="forecast-hero">'.$day['icon'].' '.$day['min'].'–'.$day['max'].'°C</span><span>☔ '.h($day['rain']).'%</span><span>🌬 '.h($day['wind']).' km/h</span><span>☀ '.h($day['sun']).' h</span></div>';
+    $w=weather_data();$times=$w['hourly']['time']??[];
+    echo '<div class="forecast-hours">';
+    foreach($times as $i=>$dateTime){
+        if(substr((string)$dateTime,0,10)!==$event['event_date'])continue;
+        $hour=(int)substr((string)$dateTime,11,2);
+        if($hour<10||$hour>22||($hour%2)!==0)continue;
+        echo '<div class="forecast-hour"><strong>'.h(substr((string)$dateTime,11,5)).'</strong><span>'.weather_icon((int)($w['hourly']['weather_code'][$i]??3)).'</span><span>'.h(round((float)($w['hourly']['temperature_2m'][$i]??0))).'°</span><small>☔ '.h($w['hourly']['precipitation_probability'][$i]??0).'%</small><small>🌬 '.h(round((float)($w['hourly']['wind_speed_10m'][$i]??0))).'</small></div>';
+    }
+    echo '</div><small class="muted">Open-Meteo · '.h(t('weather_hourly_update')).'</small></div>';
+}
+function page_weather_search_api(): void {
+    require_admin();
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: private, no-store');
+    $term=trim((string)($_GET['q']??''));
+    if(strlen($term)<2||strlen($term)>80){echo json_encode(['results'=>[]]);return;}
+    $url='https://geocoding-api.open-meteo.com/v1/search?name='.rawurlencode($term).'&count=8&language=en&format=json';
+    $ctx=stream_context_create(['http'=>['timeout'=>4,'user_agent'=>'HomeLabGriller/2.0']]);
+    $raw=@file_get_contents($url,false,$ctx);
+    $data=$raw?json_decode($raw,true):null;
+    $results=[];
+    foreach(($data['results']??[]) as $place){
+        if(!isset($place['name'],$place['latitude'],$place['longitude']))continue;
+        $results[]=['name'=>substr($place['name'].(!empty($place['admin1'])?', '.$place['admin1']:'').(!empty($place['country'])?', '.$place['country']:''),0,140),
+            'lat'=>(float)$place['latitude'],'lon'=>(float)$place['longitude']];
+    }
+    echo json_encode(['results'=>$results],JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE);
 }
 
 function page_event(): void {
@@ -1138,9 +1269,11 @@ function show_guest_status(array $event,array $guest):void {
     foreach($rows as $row){$oid=(int)$row['oid'];if(!isset($orders[$oid])){$orders[$oid]=['status'=>$row['order_status'],'created'=>$row['ordered_at'],'items'=>[]];}$orders[$oid]['items'][]=$row;}
     echo '<section class="status-section"><div class="section-title compact"><div><span class="eyebrow">LIVE STATUS</span><h2>' . h(t('my_orders')) . '</h2></div><span class="live-dot">' . h(t('live_updates')) . '</span></div>';
     if(!$orders){echo '<div class="empty compact-empty">' . h(t('no_orders_yet')) . '</div></section>';return;}
-    foreach($orders as $id=>$order){$status=$order['status'];echo '<article class="order-status-card status-' . h($status) . '" data-order-status="' . h($status) . '"><div class="order-card-head"><div><span class="eyebrow">#' . h(str_pad((string)$id,3,'0',STR_PAD_LEFT)) . ' · ' . h($order['created']) . '</span><h3>' . h(t($status)) . '</h3></div><span class="order-status-icon">' . ($status==='done'?'✓':($status==='in_progress'?'♨':($status==='cancelled'?'×':'◷'))) . '</span></div><div class="order-items">';
+    foreach($orders as $id=>$order){$status=$order['status'];$activeItems=array_values(array_filter($order['items'],static fn($i)=>$i['status']!=='cancelled'));
+        $readyCount=count(array_filter($activeItems,static fn($i)=>$i['status']==='done'));$totalCount=count($activeItems);
+        echo '<article class="order-status-card status-' . h($status) . '" data-order-id="' . h($id) . '" data-order-status="' . h($status) . '" data-ready-count="' . h($readyCount) . '"><div class="order-card-head"><div><span class="eyebrow">#' . h(str_pad((string)$id,3,'0',STR_PAD_LEFT)) . ' · ' . h($order['created']) . '</span><h3>' . h(t($status)) . ' · ' . h(t('ready_progress',['ready'=>$readyCount,'total'=>$totalCount])) . '</h3></div><span class="order-status-icon">' . ($status==='done'?'✓':($status==='in_progress'?'♨':($status==='cancelled'?'×':'◷'))) . '</span></div><div class="order-items">';
         foreach($order['items'] as $it){$details=decode_options($it['options_json']);if($it['doneness']){$details[]=doneness_options()[$it['doneness']]??$it['doneness'];}if($it['note']){$details[]=$it['note'];}
-            echo '<div class="order-item-line"><div><strong>' . h($it['quantity']) . '× ' . h($it['category_icon']) . ' ' . h($it['product_name']) . '</strong><small>' . h(implode(' · ',$details)) . '</small></div><span class="pill ' . h($it['status']) . '">' . h(t($it['status'])) . '</span></div>';
+            echo '<div class="order-item-line" data-item-status="' . h($it['status']) . '" data-item-name="' . h($it['quantity'] . '× ' . $it['product_name']) . '"><div><strong>' . h($it['quantity']) . '× ' . h($it['category_icon']) . ' ' . h($it['product_name']) . '</strong><small>' . h(implode(' · ',$details)) . '</small></div><span class="pill ' . h($it['status']) . '">' . h(t($it['status'])) . '</span></div>';
         }
         echo '</div>';
         if($status==='pending' && all_pending((int)$id) && $event['status']==='public'){
@@ -1160,7 +1293,7 @@ function render_kitchen_board(array $items):void {
     echo '<div class="queue-stats">';
     foreach($lanes as $status=>$tickets){echo '<div class="queue-stat ' . h($status) . '"><span>' . h(t($status)) . '</span><strong>' . h(count($tickets)) . '</strong></div>';}
     echo '</div><div class="kitchen-board">';
-    foreach($lanes as $status=>$tickets){echo '<section class="lane lane-' . h($status) . '"><div class="lane-head"><h3>' . h(t($status)) . '</h3><span class="pill ' . h($status) . '">' . h(count($tickets)) . '</span></div><div class="lane-content">';
+    foreach($lanes as $status=>$tickets){echo '<section class="lane lane-' . h($status) . '" data-status-lane="' . h($status) . '"><div class="lane-head"><h3>' . h(t($status)) . '</h3><span class="pill ' . h($status) . '">' . h(count($tickets)) . '</span></div><div class="lane-content">';
         $limit=$status==='done'||$status==='cancelled'?30:100;
         foreach(array_slice($tickets,0,$limit) as $it){render_ticket($it);}
         if(count($tickets)>$limit){echo '<p class="muted">+' . h(count($tickets)-$limit) . ' ' . h(t('older_orders')) . '</p>';}
@@ -1171,6 +1304,25 @@ function render_kitchen_board(array $items):void {
 function page_kitchen_api():void {
     require_admin();$id=(int)($_GET['id']??0);if(!get_event($id)){http_response_code(404);exit;}
     header('Content-Type: text/html; charset=utf-8');header('Cache-Control: private, no-store');render_kitchen_board(kitchen_items($id));
+}
+function page_kitchen_action_api(): void {
+    require_admin();
+    header('Content-Type: application/json; charset=utf-8');header('Cache-Control: private,no-store');
+    if($_SERVER['REQUEST_METHOD']!=='POST'){http_response_code(405);echo json_encode(['ok'=>false]);return;}
+    verify_csrf();$id=(int)($_GET['id']??0);$item=(int)($_POST['item_id']??0);$status=(string)($_POST['status']??'');
+    if(!get_event($id)||!in_array($status,['pending','in_progress','done','cancelled'],true)){
+        http_response_code(400);echo json_encode(['ok'=>false]);return;
+    }
+    $pdo=db();
+    $q=$pdo->prepare('SELECT oi.order_id FROM order_items oi JOIN orders o ON o.id=oi.order_id WHERE oi.id=? AND o.event_id=?');
+    $q->execute([$item,$id]);$orderId=(int)$q->fetchColumn();
+    if(!$orderId){http_response_code(404);echo json_encode(['ok'=>false]);return;}
+    $pdo->beginTransaction();
+    try{
+        $pdo->prepare('UPDATE order_items SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?')->execute([$status,$item]);
+        sync_order_status($orderId);$pdo->commit();
+        echo json_encode(['ok'=>true,'item_id'=>$item,'status'=>$status]);
+    }catch(Throwable $e){$pdo->rollBack();http_response_code(500);echo json_encode(['ok'=>false]);}
 }
 function page_admin_kitchen():void {
     require_admin();$pdo=db();$id=(int)($_GET['id']??0);$event=get_event($id);if(!$event){redirect_to('admin');}
@@ -1189,12 +1341,13 @@ function page_admin_kitchen():void {
         redirect_to('admin_kitchen',['id'=>$id]);
     }
     render_header(t('kitchen'));echo '<section class="section kitchen-shell"><div class="section-title"><div><span class="eyebrow">KITCHEN DISPLAY</span><h1>' . h(t('kitchen')) . '</h1><p class="muted">' . h($event['title']) . '</p></div><div class="split-actions"><a href="' . h(route('admin_event',['id'=>$id])) . '" class="btn ghost">← ' . h(t('event_details')) . '</a><button class="btn ghost" id="kitchen-fullscreen" type="button">⛶ ' . h(t('fullscreen')) . '</button></div></div>';
+    page_event_weather($event);
     echo '<div class="kitchen-toolbar"><div class="field"><label>' . h(t('search_orders')) . '</label><input id="kitchen-search" type="search" placeholder="' . h(t('guest')) . ', #123, ' . h(t('products')) . '"></div><span class="live-dot">' . h(t('live_updates')) . '</span></div>';
-    echo '<div id="kitchen-live-board" data-poll-url="' . h(route('kitchen_api',['id'=>$id])) . '">';render_kitchen_board(kitchen_items($id));echo '</div></section>';render_footer();
+    echo '<div id="kitchen-live-board" data-csrf="' . h(csrf_token()) . '" data-status-url="' . h(route('kitchen_action_api',['id'=>$id])) . '" data-poll-url="' . h(route('kitchen_api',['id'=>$id])) . '">';render_kitchen_board(kitchen_items($id));echo '</div></section>';render_footer();
 }
 function render_ticket(array $it):void {
     $opts=decode_options($it['options_json']);if($it['doneness']){$opts[]=doneness_options()[$it['doneness']]??$it['doneness'];}if($it['note']){$opts[]=$it['note'];}
-    echo '<article class="ticket" data-search="' . h(strtolower($it['guest_name'].' '.$it['product_name'].' #'.$it['order_number'])) . '"><div class="ticket-head"><span class="eyebrow">#' . h($it['order_number']) . ' · ' . h($it['order_created']) . '</span><span class="pill ' . h($it['status']) . '">' . h(t($it['status'])) . '</span></div><h3>' . h($it['quantity']) . '× ' . h($it['category_icon']) . ' ' . h($it['product_name']) . '</h3><strong class="ticket-guest">' . h($it['guest_name']) . '</strong>';
+    echo '<article class="ticket" draggable="true" data-item-id="' . h($it['id']) . '" data-search="' . h(strtolower($it['guest_name'].' '.$it['product_name'].' #'.$it['order_number'])) . '"><div class="ticket-head"><span class="eyebrow">#' . h($it['order_number']) . ' · ' . h($it['order_created']) . '</span><span class="pill ' . h($it['status']) . '">' . h(t($it['status'])) . '</span></div><button type="button" class="ticket-drag-handle" aria-label="' . h(t('move_ticket')) . '" title="' . h(t('move_ticket')) . '">⠿</button><h3>' . h($it['quantity']) . '× ' . h($it['category_icon']) . ' ' . h($it['product_name']) . '</h3><strong class="ticket-guest">' . h($it['guest_name']) . '</strong>';
     if($opts){echo '<p class="ticket-details">' . h(implode(' · ',$opts)) . '</p>';}
     echo '<div class="ticket-actions">';
     foreach(['pending'=>t('mark_pending'),'in_progress'=>t('mark_in_progress'),'done'=>t('mark_done')] as $status=>$label){if($it['status']===$status)continue;
@@ -1211,6 +1364,8 @@ try {
         'setup' => page_setup(),
         'guest_status_api' => page_guest_status_api(),
         'kitchen_api' => page_kitchen_api(),
+        'kitchen_action_api' => page_kitchen_action_api(),
+        'weather_search_api' => page_weather_search_api(),
         'admin_settings' => page_admin_settings(),
         'admin_ingredients' => page_admin_ingredients(),
         'admin_guests' => page_admin_guests(),

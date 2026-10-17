@@ -1,15 +1,21 @@
 # Changelog
 
+## 2.0.0-beta.2
+
+- First-run admin account without log token; minimum password length 6
+- Newly created events are public by default; today's events prioritized in admin dashboard
+- Event title links directly to grill-master board
+- Guest option selection preserves scroll and auto-sets quantity from 0 to 1 only
+- Partial readiness per order and targeted ready notifications
+- Distinct kitchen status colors; mouse and mobile long-press drag-and-drop
+- Weather location search, hourly Open-Meteo cache, event preview and grill-master hourly forecast
+- Configurable footer text, visible pages and version display
+- Optional Apache HTTPS listener and in-admin certificate upload (restart required)
+- README streamlined to Docker / Proxmox installation and updates, promotional artwork only
+- License changed for **this release** to PolyForm Noncommercial 1.0.0 (prior MIT grants remain in effect)
+
 ## 2.0.0-beta.1
 
-- New mobile guest ordering wizard, review and edit/cancel rules.
-- Live guest status and responsive grill-master queue with search/fullscreen.
-- Browser-based first-run account setup using a one-time token.
-- Persistent admin settings: themes, language and optional Open-Meteo weather.
-- Reusable ingredient library and improved category/product editors.
-- Guest profiles management, German/English/Spanish language packs.
-- Docker data path blocked by Apache, SQLite indexes and WAL mode.
-- Proxmox LXC installation and update scripts; source Full/Update release ZIPs.
-- Brand assets and streamlined README.
-
-**Beta:** Back up and test with realistic guest traffic before public use.
+- New responsive interface, mobile order wizard, guest order editing and cancellation
+- Ingredient library, live kitchen board, first-run account wizard and themes
+- DE, EN, ES language packs, Open-Meteo widget and multi-arch Docker releases

@@ -4,6 +4,7 @@ set -Eeuo pipefail
 APP_IMAGE="${APP_IMAGE:-ghcr.io/borderlane-ha/homelab-griller:latest}"
 CT_HOSTNAME="${CT_HOSTNAME:-homelab-griller}"
 APP_PORT="${APP_PORT:-8091}"
+HTTPS_PORT="${HTTPS_PORT:-8443}"
 TZ_VALUE="${TZ_VALUE:-Europe/Berlin}"
 DEFAULT_LANGUAGE="${GRILLER_DEFAULT_LANGUAGE:-de}"
 MEMORY="${MEMORY:-1024}"
@@ -254,6 +255,7 @@ APP_IMAGE_Q="$(yaml_quote "${APP_IMAGE}")"
 TZ_VALUE_Q="$(yaml_quote "${TZ_VALUE}")"
 DEFAULT_LANGUAGE_Q="$(yaml_quote "${DEFAULT_LANGUAGE}")"
 APP_PORT_Q="$(yaml_quote "${APP_PORT}:80")"
+HTTPS_PORT_Q="$(yaml_quote "${HTTPS_PORT}:443")"
 
 pct exec "${CTID}" -- bash -s <<INSTALL_APP
 set -Eeuo pipefail
@@ -266,6 +268,7 @@ services:
     restart: unless-stopped
     ports:
       - ${APP_PORT_Q}
+      - ${HTTPS_PORT_Q}
     environment:
       TZ: ${TZ_VALUE_Q}
       GRILLER_DEFAULT_LANGUAGE: ${DEFAULT_LANGUAGE_Q}
@@ -285,9 +288,9 @@ log "Installation finished"
 echo "Container ID: ${CTID}"
 echo "Hostname: ${CT_HOSTNAME}"
 echo "Open: http://${CT_IP:-LXC-IP}:${APP_PORT}"
+echo "Optional HTTPS (self-signed until configured): https://${CT_IP:-LXC-IP}:${HTTPS_PORT}"
 echo "Admin credentials: create them in the web first-run setup."
-echo "One-time setup token (store privately):"
-pct exec "${CTID}" -- sh -c 'cat /opt/homelab-griller/data/setup-token 2>/dev/null || true'
+echo "Configure your administrator account when you first open the web interface."
 echo ""
 echo "LXC root password: ${ROOT_PASSWORD}"
 echo ""

@@ -1,30 +1,20 @@
-# Upgrade from HomeLab Griller v1 to v2
+# Upgrade to HomeLab Griller v2
 
-v2 is a major release. **Back up the original SQLite database and test on a copy.**
+**Back up your existing SQLite database first, and test the upgrade on a copy.**
 
-## Before upgrading
+1. Save the source of your existing version with a Git tag or `legacy-v1` branch.
+2. In your current Compose directory, run `docker compose down` and copy `./data` to a backup.
+3. Replace the Compose configuration with the example in the new README. Keep the **same `./data` mount**.
+4. v2 no longer uses `GRILLER_ADMIN_PASSWORD` for login. Remove this variable from Compose.
+5. Run `docker compose pull && docker compose up -d`.
+6. Open the application locally and create your admin username and password (minimum 6 characters). **There is no setup token.** Complete setup immediately, before giving others network access.
 
-1. Confirm your current host data directory is mounted at `/var/www/html/data`.
-2. Stop the old container: `docker compose down`.
-3. Backup the directory: `cp -a data data-backup-before-v2`.
-4. Save your old project source in a Git tag/branch (e.g. `legacy-v1`).
-
-## Upgrade using Docker
-
-1. Replace the Compose file with the v2 example from `README.md` (port `8091:80`).
-2. Remove `GRILLER_ADMIN_PASSWORD`; v2 uses first-run setup and hashes stored in SQLite.
-3. Run `docker compose pull && docker compose up -d`.
-4. Retrieve the one-time token with `docker compose logs --tail=30 homelab-griller`.
-5. Open the web UI and set up your admin account.
-
-Events, products, categories and order history stay in the database. Reusable ingredients and settings are migrated on application startup.
+The application migrates existing SQLite tables/settings and seeds reusable ingredients without deleting previous events, products, guests or order history. Run this migration against a **copy of production data** first.
 
 ## Proxmox
 
-The new installer is for **fresh installations only**. Existing v1 LXC users should back up `/opt/homelab-griller/data` and run the Proxmox updater or update Docker Compose inside their existing LXC. Do not run a fresh installer on top of a current CT.
+The Proxmox installation script is for **new LXCs only**. For an existing LXC, run the update script after backing up `/opt/homelab-griller/data`; do **not** overwrite an existing CT.
 
 ## Update ZIP
 
-Update ZIPs are source-code-only deltas, never an SQLite dump. **Do not overwrite or delete `data/`.**
-
-If a previous version includes untracked files, review deletions separately; the release archive does not remove files automatically.
+Update ZIPs contain updated source files only, not SQLite data. They do not automatically delete old files. Docker/Proxmox image-based installations should **not** use source ZIPs for updates.
