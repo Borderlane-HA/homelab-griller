@@ -88,6 +88,77 @@
     };
     setInterval(pollOverview, 15000);
   }
+  // Theme studio: instant client-side preview, serialized persistence to avoid stale writes.
+  const themeStudio = $('theme-studio');
+  if (themeStudio) {
+    const body = document.body, status = $('theme-save-status');
+    const buttons = [...themeStudio.querySelectorAll('[data-theme-select]')];
+    const fields = {accent:$('theme-accent'),mode:$('theme-mode'),cards:$('theme-cards')};
+    const customPanel = $('custom-theme-controls');
+    let confirmedTheme = buttons.find(b => b.getAttribute('aria-pressed') === 'true')?.dataset.themeSelect || 'ember';
+    let confirmedCustom = {accent:fields.accent.value,mode:fields.mode.value,cards:fields.cards.value};
+    let wantedTheme = confirmedTheme, wantedCustom = {...confirmedCustom};
+    let timer = null, running = false;
+    const accentFg = color => {
+      const rgb = [1,3,5].map(offset => parseInt(color.slice(offset,offset+2),16)/255);
+      const parts = rgb.map(x => x<=0.04045 ? x/12.92 : Math.pow((x+0.055)/1.055,2.4));
+      const luminance = parts[0]*0.2126+parts[1]*0.7152+parts[2]*0.0722;
+      return luminance >= 0.179 ? '#000000' : '#ffffff';
+    };
+    const updateScreen = (theme,custom) => {
+      body.className = body.className.replace(/\btheme-(?:ember|garden|midnight|nordic|smoke|kids|custom)\b/g,'').trim();
+      body.classList.add('theme-'+theme);
+      body.dataset.customMode = custom.mode;
+      body.dataset.cardStyle = custom.cards;
+      body.style.setProperty('--custom-accent',custom.accent);
+      body.style.setProperty('--custom-accent-fg',accentFg(custom.accent));
+      document.querySelector('meta[name="theme-color"]')?.setAttribute('content',getComputedStyle(body).getPropertyValue('--bg').trim());
+      buttons.forEach(button => {
+        const active=button.dataset.themeSelect===theme;
+        button.classList.toggle('selected',active);
+        button.setAttribute('aria-pressed',String(active));
+        button.querySelector('.theme-active-chip').textContent=active?themeStudio.dataset.activeText:'';
+      });
+      customPanel.hidden=theme!=='custom';
+    };
+    const fingerprint = (theme,custom) => JSON.stringify([theme,theme==='custom'?custom:null]);
+    const persist = async () => {
+      if (running) return;
+      running=true;
+      try {
+        while(fingerprint(wantedTheme,wantedCustom)!==fingerprint(confirmedTheme,confirmedCustom)){
+          const currentTheme=wantedTheme,currentCustom={...wantedCustom};
+          const data=new URLSearchParams({csrf:themeStudio.dataset.csrf,theme:currentTheme,...currentCustom});
+          const response=await fetch(themeStudio.dataset.saveUrl,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:data.toString(),cache:'no-store'});
+          const result=response.ok?await response.json():null;
+          if(!result?.ok) throw new Error('Theme save rejected');
+          confirmedTheme=currentTheme;confirmedCustom=currentCustom;
+        }
+        status.textContent=themeStudio.dataset.saved;status.classList.remove('error');
+      } catch (_) {
+        wantedTheme=confirmedTheme;wantedCustom={...confirmedCustom};
+        fields.accent.value=confirmedCustom.accent;fields.mode.value=confirmedCustom.mode;fields.cards.value=confirmedCustom.cards;
+        updateScreen(wantedTheme,wantedCustom);
+        status.textContent=themeStudio.dataset.error;status.classList.add('error');
+      } finally {
+        running=false;
+        if(fingerprint(wantedTheme,wantedCustom)!==fingerprint(confirmedTheme,confirmedCustom))void persist();
+      }
+    };
+    const queue = delay => {
+      status.textContent='…';status.classList.remove('error');
+      clearTimeout(timer);timer=setTimeout(()=>{void persist();},delay);
+    };
+    buttons.forEach(button=>button.addEventListener('click',()=>{
+      wantedTheme=button.dataset.themeSelect;wantedCustom={accent:fields.accent.value,mode:fields.mode.value,cards:fields.cards.value};
+      updateScreen(wantedTheme,wantedCustom);queue(80);
+    }));
+    Object.values(fields).forEach(input=>input.addEventListener(input.type==='color'?'input':'change',()=>{
+      wantedTheme='custom';wantedCustom={accent:fields.accent.value,mode:fields.mode.value,cards:fields.cards.value};
+      updateScreen(wantedTheme,wantedCustom);queue(input.type==='color'?350:120);
+    }));
+  }
+
   const form = $('guest-order-form');
   if (form) {
     const wizard = $('order-wizard');

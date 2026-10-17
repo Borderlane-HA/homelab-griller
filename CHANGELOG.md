@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.0.0-beta.6
+
+- Six fully coordinated themes: Classic Grill, Summer Garden, Dark Mode, Nordic Light, Smokehouse and Kids Party; original theme keys remain backward compatible.
+- New theme gallery with miniature previews, one-click live application and immediate CSRF-protected AJAX persistence.
+- Custom Theme with constrained accent color, light/dark mode and card finish; automatically saved without interrupting admin work.
+- Optional securely validated branding images (logo and hero banner), persisted in the mounted data directory.
+- Semantic contrast tokens for type, buttons, status labels and overlays throughout desktop and mobile views.
+- Fixed beta.5 CI smoke test CSRF lookup after the admin Events split, and added theme-related integration checks.
+- No database schema change; existing events, guests, orders, recipes, and inventory remain untouched.
+
+
 ## 2.0.0-beta.5
 
 - Desktop sidebar and mobile bottom navigation with an accessible More drawer.

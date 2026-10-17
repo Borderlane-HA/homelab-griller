@@ -91,6 +91,35 @@ for page in admin_categories admin_products admin_ingredients admin_guests admin
   grep -q 'admin-sidebar' "$DIR/${page}.html" || { echo "Admin menu missing on $page"; exit 1; }
 done
 
+# Verify preset and custom themes apply via AJAX and persist across fresh HTTP requests.
+settings_csrf="$(grep -m1 -oE 'name="csrf" value="[a-f0-9]+"' "$DIR/admin_settings.html" | cut -d '"' -f4 || true)"
+[[ -n "$settings_csrf" ]] || { echo 'Missing settings CSRF token'; exit 1; }
+grep -q 'data-theme-select="kids"' "$DIR/admin_settings.html" || { echo 'Theme gallery missing'; exit 1; }
+for selected in garden midnight nordic smoke kids ember; do
+  curl -fsS -b "$DIR/cookies" --data-urlencode "csrf=$settings_csrf" --data-urlencode "theme=$selected" \
+    "$BASE/?r=admin_theme_api" -o "$DIR/theme.json"
+  python3 - "$DIR/theme.json" "$selected" <<'PYTHEME'
+import json,sys
+r=json.load(open(sys.argv[1]));assert r.get('ok') and r.get('theme')==sys.argv[2],r
+PYTHEME
+  http_get -fsS -b "$DIR/cookies" "$BASE/?r=admin_settings" -o "$DIR/theme-view.html"
+  grep -q "class="theme-$selected admin-ui"" "$DIR/theme-view.html" || { echo "Theme $selected not persisted"; exit 1; }
+done
+curl -fsS -b "$DIR/cookies" --data-urlencode "csrf=$settings_csrf" --data-urlencode 'theme=custom' \
+  --data-urlencode 'accent=#325dc7' --data-urlencode 'mode=light' --data-urlencode 'cards=outlined' \
+  "$BASE/?r=admin_theme_api" -o "$DIR/custom.json"
+python3 - "$DIR/custom.json" <<'PYTHEME'
+import json,sys
+assert json.load(open(sys.argv[1]))=={'ok':True,'theme':'custom'}
+PYTHEME
+http_get -fsS -b "$DIR/cookies" "$BASE/?r=admin_settings" -o "$DIR/theme-view.html"
+grep -q 'class="theme-custom admin-ui" data-custom-mode="light" data-card-style="outlined"' "$DIR/theme-view.html" || { echo 'Custom Theme did not persist'; exit 1; }
+# Saving other settings must not reset the currently selected theme.
+curl -fsS -b "$DIR/cookies" --data-urlencode "csrf=$settings_csrf" --data-urlencode 'action=save' --data-urlencode 'default_language=en' \
+  "$BASE/?r=admin_settings" -o /dev/null
+http_get -fsS -b "$DIR/cookies" "$BASE/?r=admin_settings" -o "$DIR/theme-view.html"
+grep -q 'class="theme-custom admin-ui"' "$DIR/theme-view.html" || { echo 'Settings reset theme'; exit 1; }
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/?r=theme_image&kind=logo")" == 404 ]] || { echo 'Unexpected logo asset'; exit 1; }
 [[ "$(http_get -sS -o /dev/null -w '%{http_code}' "$BASE/data/tls/server.key")" == 403 ]] || { echo 'Private key exposed!' >&2; exit 1; }
 # Enable inventory for the first product and cap it at one serving.
 http_get -fsS -b "$DIR/cookies" "$BASE/?r=admin_inventory&id=1" -o "$DIR/inventory.html"
@@ -147,4 +176,4 @@ item=json.load(open(sys.argv[1]))['products'][sys.argv[2]]
 assert item['remaining']==1,item
 PYJSON
 
-echo 'Smoke checks passed: first-run, HTTP/HTTPS security, public events, stock caps, oversell protection and cancellation release.' 
+echo 'Smoke checks passed: first-run, HTTP/HTTPS, theme persistence, public events, inventory limits, oversell protection and cancellation.' 

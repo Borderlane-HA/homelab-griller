@@ -259,6 +259,94 @@ function setting(string $key, string $default = ''): string {
 function put_setting(string $key, string $value): void {
     db()->prepare('INSERT INTO app_settings(setting_key,setting_value) VALUES(?,?) ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value')->execute([$key,$value]);
 }
+function allowed_themes(): array { return ['ember','garden','midnight','nordic','smoke','kids','custom']; }
+function active_theme(): string {
+    $v=setting('theme','ember');
+    return in_array($v,allowed_themes(),true)?$v:'ember';
+}
+function custom_theme_style(): string {
+    $accent=setting('theme_custom_accent','#e97838');
+    if(!preg_match('/^#[0-9A-Fa-f]{6}$/D',$accent))$accent='#e97838';
+    $parts=sscanf(substr($accent,1),'%02x%02x%02x');
+    $linear=static function(int $n):float{$v=$n/255;return $v<=.04045?$v/12.92:pow(($v+.055)/1.055,2.4);};
+    $lum=.2126*$linear($parts[0])+.7152*$linear($parts[1])+.0722*$linear($parts[2]);
+    $contrast=$lum>=0.179?'#000000':'#ffffff';
+    return '--custom-accent:'.strtolower($accent).';--custom-accent-fg:'.$contrast.';';
+}
+function theme_image_url(string $kind): string {
+    if(!in_array($kind,['logo','banner'],true))return '';
+    return setting('theme_'.$kind.'_image')!==''?route('theme_image',['kind'=>$kind,'v'=>(string)@filemtime(DATA_DIR.'/branding/'.setting('theme_'.$kind.'_image'))]):'';
+}
+function theme_logo_url(): string { return theme_image_url('logo')?:'assets/logo.svg'; }
+function theme_banner_url(): string { return theme_image_url('banner')?:'assets/hero-grill.svg'; }
+function page_theme_image(): void {
+    $kind=(string)($_GET['kind']??'');
+    if(!in_array($kind,['logo','banner'],true)){http_response_code(404);return;}
+    $file=setting('theme_'.$kind.'_image');
+    if(!preg_match('/^'.preg_quote($kind,'/').'\\.(?:png|jpg|webp)$/D',$file)){http_response_code(404);return;}
+    $path=DATA_DIR.'/branding/'.$file;
+    if(!is_file($path)){http_response_code(404);return;}
+    $mime=match(strtolower(pathinfo($file,PATHINFO_EXTENSION))){'png'=>'image/png','jpg'=>'image/jpeg','webp'=>'image/webp'};
+    header('Content-Type: '.$mime);header('X-Content-Type-Options: nosniff');
+    header('Cache-Control: public, max-age=300');
+    readfile($path);
+}
+function page_theme_asset_upload(): void {
+    require_admin();if($_SERVER['REQUEST_METHOD']!=='POST'){http_response_code(405);return;}
+    verify_csrf();$kind=(string)($_POST['kind']??'');
+    if(!in_array($kind,['logo','banner'],true)){http_response_code(400);return;}
+    if(($_POST['action']??'')==='remove'){
+        $old=setting('theme_'.$kind.'_image');
+        put_setting('theme_'.$kind.'_image','');
+        if($old!==''&&is_file(DATA_DIR.'/branding/'.$old))@unlink(DATA_DIR.'/branding/'.$old);
+        flash(t('theme_image_removed'));redirect_to('admin_settings');
+    }
+    $file=$_FILES['image']??null;
+    $maxSize=$kind==='logo'?2*1024*1024:5*1024*1024;
+    if(!$file||$file['error']!==UPLOAD_ERR_OK||$file['size']<1||$file['size']>$maxSize||!is_uploaded_file($file['tmp_name'])){
+        flash(t('theme_image_invalid'),'bad');redirect_to('admin_settings');
+    }
+    $info=@getimagesize($file['tmp_name']);
+    $supported=['image/png'=>'png','image/jpeg'=>'jpg','image/webp'=>'webp'];
+    if(!$info||!isset($supported[$info['mime']])||$info[0]>4000||$info[1]>4000){
+        flash(t('theme_image_invalid'),'bad');redirect_to('admin_settings');
+    }
+    $dir=DATA_DIR.'/branding';if(!is_dir($dir)&&!mkdir($dir,0750,true)&&!is_dir($dir)){
+        flash(t('theme_image_invalid'),'bad');redirect_to('admin_settings');
+    }
+    $filename=$kind.'.'.$supported[$info['mime']];
+    $target=$dir.'/'.$filename;
+    if(!move_uploaded_file($file['tmp_name'],$target)){
+        flash(t('theme_image_invalid'),'bad');redirect_to('admin_settings');
+    }
+    chmod($target,0640);
+    $old=setting('theme_'.$kind.'_image');
+    put_setting('theme_'.$kind.'_image',$filename);
+    if($old!==''&&$old!==$filename&&is_file($dir.'/'.$old))@unlink($dir.'/'.$old);
+    flash(t('theme_image_uploaded'));redirect_to('admin_settings');
+}
+function page_admin_theme_api(): void {
+    if(!is_admin()){http_response_code(401);header('Content-Type: application/json');echo json_encode(['ok'=>false]);return;}
+    if($_SERVER['REQUEST_METHOD']!=='POST'){http_response_code(405);return;}
+    verify_csrf();
+    $theme=(string)($_POST['theme']??'');
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store');
+    if(!in_array($theme,allowed_themes(),true)){http_response_code(422);echo json_encode(['ok'=>false]);return;}
+    if($theme==='custom'){
+        $accent=(string)($_POST['accent']??setting('theme_custom_accent','#e97838'));
+        $mode=(string)($_POST['mode']??setting('theme_custom_mode','dark'));
+        $cards=(string)($_POST['cards']??setting('theme_custom_cards','soft'));
+        if(!preg_match('/^#[a-fA-F0-9]{6}$/D',$accent)||!in_array($mode,['light','dark'],true)||!in_array($cards,['soft','outlined','glass'],true)){
+            http_response_code(422);echo json_encode(['ok'=>false]);return;
+        }
+        put_setting('theme_custom_accent',strtolower($accent));
+        put_setting('theme_custom_mode',$mode);
+        put_setting('theme_custom_cards',$cards);
+    }
+    put_setting('theme',$theme);
+    echo json_encode(['ok'=>true,'theme'=>$theme]);
+}
 function setup_required(): bool { return setting('admin_hash') === ''; }
 function admin_username(): string { return setting('admin_username', 'Griller'); }
 function admin_password_valid(string $value): bool {
@@ -446,7 +534,7 @@ function admin_language_select():void {
 }
 function admin_header_shell():void {
     echo '<div class="admin-app-shell"><aside class="admin-sidebar" aria-label="'.h(t('nav_main')).'">';
-    echo '<a class="admin-brand" href="'.h(route('admin')).'"><span class="admin-brand-icon"><img src="assets/logo.svg" alt=""></span><span><strong>HomeLab Griller</strong><small>by Pengu · CONTROL CENTER</small></span></a>';
+    echo '<a class="admin-brand" href="'.h(route('admin')).'"><span class="admin-brand-icon"><img src="'.h(theme_logo_url()).'" alt=""></span><span><strong>HomeLab Griller</strong><small>by Pengu · CONTROL CENTER</small></span></a>';
     echo '<nav class="admin-side-scroll">';admin_navigation('desktop');echo '</nav>';
     echo '<div class="admin-sidebar-footer"><div class="admin-profile"><span class="admin-avatar">G</span><span><strong>'.h(admin_username()).'</strong><small>'.h(t('admin')).'</small></span></div><a class="admin-signout" href="'.h(route('admin_logout')).'" aria-label="'.h(t('logout')).'">'.admin_icon('logout').'</a></div></aside>';
     echo '<div class="admin-workspace"><div class="admin-topbar"><div class="admin-breadcrumb"><span>HomeLab Griller</span>'.admin_icon('chevron').'<strong>'.h(admin_current_label()).'</strong></div><div class="admin-top-actions">';
@@ -466,14 +554,17 @@ function admin_header_shell():void {
 function render_header(string $title = ''): void {
     $langs = available_langs();
     $current = $_SESSION['lang'] ?? setting('default_language',(getenv('GRILLER_DEFAULT_LANGUAGE') ?: 'de'));
-    $assetVersion = is_file(__DIR__ . '/VERSION') ? trim((string)file_get_contents(__DIR__ . '/VERSION')) : '2.0.0-beta.5';
+    $assetVersion = is_file(__DIR__ . '/VERSION') ? trim((string)file_get_contents(__DIR__ . '/VERSION')) : '2.0.0-beta.6';
     $adminLayout=admin_layout_enabled();
     echo '<!doctype html><html lang="' . h($current) . '"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">';
     echo '<title>' . h($title ? $title . ' · ' . t('app_name') : t('app_name')) . '</title>';
-    echo '<meta name="theme-color" content="#14191d"><link rel="icon" href="assets/favicon.svg"><link rel="stylesheet" href="assets/style.css?v='.h(rawurlencode($assetVersion)).'"></head><body class="theme-' . h(setting('theme','ember')) . ($adminLayout?' admin-ui':'') . '">';
+    $mode=setting('theme_custom_mode','dark')==='light'?'light':'dark';
+    $cards=in_array(setting('theme_custom_cards','soft'),['soft','outlined','glass'],true)?setting('theme_custom_cards','soft'):'soft';
+    $themeBackgrounds=['ember'=>'#0e1419','smoke'=>'#131313','garden'=>'#eef5e9','nordic'=>'#eef3f6','midnight'=>'#0b101a','kids'=>'#fff2f9','custom'=>($mode==='light'?'#f1f4f5':'#10161c')];
+    echo '<meta name="theme-color" content="'.h($themeBackgrounds[active_theme()]).'"><link rel="icon" href="assets/favicon.svg"><link rel="stylesheet" href="assets/style.css?v='.h(rawurlencode($assetVersion)).'"></head><body class="theme-' . h(active_theme()) . ($adminLayout?' admin-ui':'') . '" data-custom-mode="'.h($mode).'" data-card-style="'.h($cards).'" style="'.h(custom_theme_style()).'">';
     if($adminLayout)admin_header_shell();
     else {
-        echo '<header class="topbar"><div class="container topbar-inner"><a class="brand" href="' . h(route('home')) . '"><img src="assets/logo.svg" alt=""><span>' . h(t('app_name')) . ' <small class="muted">' . h(t('by_pengu')) . '</small></span></a><nav class="nav">';
+        echo '<header class="topbar"><div class="container topbar-inner"><a class="brand" href="' . h(route('home')) . '"><img src="'.h(theme_logo_url()).'" alt=""><span>' . h(t('app_name')) . ' <small class="muted">' . h(t('by_pengu')) . '</small></span></a><nav class="nav">';
         echo '<form class="lang-select" method="get"><input type="hidden" name="r" value="' . h($_GET['r'] ?? 'home') . '">';
         foreach ($_GET as $k => $v) { if (!in_array($k, ['r','lang'], true) && is_scalar($v)) { echo '<input type="hidden" name="' . h($k) . '" value="' . h($v) . '">'; } }
         echo '<label class="muted" for="lang">' . h(t('language')) . '</label><select id="lang" name="lang" onchange="this.form.submit()">';
@@ -496,12 +587,12 @@ function render_footer(): void {
         $txt=setting('footer_text',t('footer'));
         echo '<footer class="footer'.(admin_layout_enabled()?' admin-footer':'') .'"><div class="container">' . nl2br(h($txt));
         if(setting('footer_show_version','0')==='1'){
-            $version=is_file(__DIR__.'/VERSION')?trim((string)file_get_contents(__DIR__.'/VERSION')):'2.0.0-beta.5';
+            $version=is_file(__DIR__.'/VERSION')?trim((string)file_get_contents(__DIR__.'/VERSION')):'2.0.0-beta.6';
             echo ' <span class="footer-version">v' . h($version) . '</span>';
         }
         echo '</div></footer>';
     }
-    $assetVersion = is_file(__DIR__ . '/VERSION') ? trim((string)file_get_contents(__DIR__ . '/VERSION')) : '2.0.0-beta.5';
+    $assetVersion = is_file(__DIR__ . '/VERSION') ? trim((string)file_get_contents(__DIR__ . '/VERSION')) : '2.0.0-beta.6';
     echo '<script defer src="assets/app.js?v=' . h(rawurlencode($assetVersion)) . '"></script></body></html>';
 }
 function admin_tabs(): void { // The shared sidebar replaces the old button rows.
@@ -849,7 +940,7 @@ function page_home(): void {
     $pdo = db();
     $events = $pdo->query("SELECT * FROM events WHERE status = 'public' ORDER BY COALESCE(event_date,'9999-12-31'), created_at DESC")->fetchAll();
     render_header();
-    echo '<section class="hero"><div><span class="eyebrow">SCAN · ORDER · ENJOY</span><h1>' . h(t('hero_title')) . '</h1><p>' . h(t('hero_subtitle')) . '</p><div class="split-actions"><a class="btn primary" href="' . h(route(is_admin()?'admin':'admin_login')) . '">' . h(t('admin')) . '</a><a class="btn ghost" href="#events">' . h(t('open_events')) . '</a></div></div><div class="hero-card"><img src="assets/hero-grill.svg" alt=""></div></section>';
+    echo '<section class="hero"><div><span class="eyebrow">SCAN · ORDER · ENJOY</span><h1>' . h(t('hero_title')) . '</h1><p>' . h(t('hero_subtitle')) . '</p><div class="split-actions"><a class="btn primary" href="' . h(route(is_admin()?'admin':'admin_login')) . '">' . h(t('admin')) . '</a><a class="btn ghost" href="#events">' . h(t('open_events')) . '</a></div></div><div class="hero-card"><img src="'.h(theme_banner_url()).'" alt=""></div></section>';
     echo '<section id="events" class="section"><div class="section-title"><h2>' . h(t('open_events')) . '</h2></div>';
     if (!$events) { echo '<div class="empty">' . h(t('no_public_events')) . '</div>'; }
     else {
@@ -858,7 +949,7 @@ function page_home(): void {
             $eventDay=(string)($e['event_date']??'');$today=$eventDay===date('Y-m-d');$forecast=$eventDay?weather_day($eventDay):null;
             $formattedDate=$eventDay?(date('d.m.Y',strtotime($eventDay))):'—';
             echo '<article class="public-event-card"><div class="public-event-header"><span class="event-badge">'.($today?'● '.h(t('inventory_today')):'✦ '.h(t('public'))).'</span><span class="public-event-id">BBQ · '.h(strtoupper(substr($e['slug'],0,18))).'</span></div>';
-            echo '<div class="public-event-main"><div class="event-visual"><img src="assets/hero-grill.svg" alt="" loading="lazy"></div><div><div class="public-event-date">📅 '.h($formattedDate).'</div><h3>'.h($e['title']).'</h3>';
+            echo '<div class="public-event-main"><div class="event-visual"><img src="'.h(theme_banner_url()).'" alt="" loading="lazy"></div><div><div class="public-event-date">📅 '.h($formattedDate).'</div><h3>'.h($e['title']).'</h3>';
             if($e['description'])echo '<p class="public-event-description">'.nl2br(h($e['description'])).'</p>';
             echo '</div></div>';
             if($forecast){
@@ -881,7 +972,7 @@ function page_setup(): void {
         if (preg_match('/^[\p{L}\p{N}_.-]{3,32}$/u',$username) && preg_match_all('/./us',$password)>=6 && hash_equals($password,(string)($_POST['password_confirm']??''))) {
             put_setting('admin_username',$username);
             put_setting('admin_hash',password_hash($password,PASSWORD_DEFAULT));
-            put_setting('theme',in_array($_POST['theme']??'', ['ember','smoke','garden','nordic'],true)?$_POST['theme']:'ember');
+            put_setting('theme',in_array($_POST['theme']??'', allowed_themes(),true)?$_POST['theme']:'ember');
             $_SESSION['admin']=true;
             file_put_contents(DATA_DIR.'/admin-configured','1');
             session_regenerate_id(true);
@@ -890,7 +981,7 @@ function page_setup(): void {
         flash(t('setup_invalid'),'bad'); redirect_to('setup');
     }
     render_header(t('setup_title'));
-    echo '<section class="section setup-page"><div class="card setup-card"><span class="eyebrow">HOMELAB GRILLER · V2</span><h1>' . h(t('setup_title')) . '</h1><p class="muted">' . h(t('setup_hint')) . '</p><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><div class="field"><label>' . h(t('username')) . '</label><input required name="username" value="Griller" minlength="3" maxlength="32"></div><div class="field"><label>' . h(t('password')) . ' (6+)</label><input required minlength="6" type="password" name="password" autocomplete="new-password"></div><div class="field"><label>' . h(t('confirm_password')) . '</label><input required minlength="6" type="password" name="password_confirm" autocomplete="new-password"></div><div class="field"><label>' . h(t('theme')) . '</label><select name="theme"><option value="ember">Ember</option><option value="smoke">Smokehouse</option><option value="garden">Summer Garden</option><option value="nordic">Nordic</option></select></div><button class="primary" type="submit">' . h(t('finish_setup')) . '</button></form></div></section>';
+    echo '<section class="section setup-page"><div class="card setup-card"><span class="eyebrow">HOMELAB GRILLER · V2</span><h1>' . h(t('setup_title')) . '</h1><p class="muted">' . h(t('setup_hint')) . '</p><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><div class="field"><label>' . h(t('username')) . '</label><input required name="username" value="Griller" minlength="3" maxlength="32"></div><div class="field"><label>' . h(t('password')) . ' (6+)</label><input required minlength="6" type="password" name="password" autocomplete="new-password"></div><div class="field"><label>' . h(t('confirm_password')) . '</label><input required minlength="6" type="password" name="password_confirm" autocomplete="new-password"></div><div class="field"><label>' . h(t('theme')) . '</label><select name="theme"><option value="ember">Ember</option><option value="smoke">Smokehouse</option><option value="garden">Summer Garden</option><option value="nordic">Nordic Light</option><option value="midnight">Dark Mode</option><option value="kids">Kids Party</option></select></div><button class="primary" type="submit">' . h(t('finish_setup')) . '</button></form></div></section>';
     render_footer();
 }
 function page_admin_login(): void {
@@ -905,7 +996,7 @@ function page_admin_login(): void {
         flash(t('login_failed'),'bad'); redirect_to('admin_login');
     }
     render_header(t('login_title'));
-    echo '<section class="section"><div class="grid cols-2 auth-layout"><div class="card"><span class="eyebrow">GRILL MASTER</span><h1>' . h(t('login_title')) . '</h1><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><div class="field"><label>' . h(t('username')) . '</label><input name="username" required value="' . h(admin_username()) . '" autocomplete="username"></div><div class="field"><label>' . h(t('password')) . '</label><input name="password" required type="password" autocomplete="current-password"></div><button class="primary" type="submit">' . h(t('login')) . '</button></form></div><div class="hero-card"><img src="assets/hero-grill.svg" alt=""></div></div></section>';
+    echo '<section class="section"><div class="grid cols-2 auth-layout"><div class="card"><span class="eyebrow">GRILL MASTER</span><h1>' . h(t('login_title')) . '</h1><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><div class="field"><label>' . h(t('username')) . '</label><input name="username" required value="' . h(admin_username()) . '" autocomplete="username"></div><div class="field"><label>' . h(t('password')) . '</label><input name="password" required type="password" autocomplete="current-password"></div><button class="primary" type="submit">' . h(t('login')) . '</button></form></div><div class="hero-card"><img src="'.h(theme_banner_url()).'" alt=""></div></div></section>';
     render_footer();
 }
 
@@ -1359,7 +1450,6 @@ function page_admin_settings(): void {
             session_regenerate_id(true);
             flash(t('password_changed')); redirect_to('admin_settings');
         }
-        put_setting('theme',in_array($_POST['theme']??'', ['ember','smoke','garden','nordic'],true)?$_POST['theme']:'ember');
         put_setting('default_language',in_array($_POST['default_language']??'',array_keys(available_langs()),true)?$_POST['default_language']:'de');
         foreach(['weather_lat','weather_lon'] as $key) {
             $v=trim((string)($_POST[$key]??''));
@@ -1375,9 +1465,40 @@ function page_admin_settings(): void {
         flash(t('settings_saved')); redirect_to('admin_settings');
     }
     render_header(t('settings')); echo '<section class="section"><div class="section-title"><h1>' . h(t('settings')) . '</h1></div>'; admin_tabs();
-    echo '<div class="grid cols-2"><div class="card"><h2>' . h(t('appearance')) . '</h2><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="save"><div class="field"><label>' . h(t('theme')) . '</label><div class="theme-chooser">';
-    foreach(['ember'=>'Ember','smoke'=>'Smokehouse','garden'=>'Summer Garden','nordic'=>'Nordic'] as $key=>$label){echo '<label class="theme-swatch ' . h($key) . '"><input type="radio" name="theme" value="' . h($key) . '" ' . (setting('theme','ember')===$key?'checked':'') . '><span class="swatch"></span><strong>' . h($label) . '</strong></label>';}
-    echo '</div></div><div class="field"><label>' . h(t('default_language')) . '</label><select name="default_language">';
+    echo '<div class="theme-studio card" id="theme-studio" data-save-url="'.h(route('admin_theme_api')).'" data-csrf="'.h(csrf_token()).'" data-saved="'.h(t('theme_saved')).'" data-error="'.h(t('theme_save_error')).'" data-active-text="'.h(t('theme_active')).'">';
+    echo '<div class="theme-studio-header"><div><span class="eyebrow">'.h(t('appearance')).'</span><h2>'.h(t('themes_choose')).'</h2><p class="muted">'.h(t('themes_hint')).'</p></div><span id="theme-save-status" class="theme-save-status" role="status" aria-live="polite"></span></div>';
+    echo '<div class="theme-gallery" role="group" aria-label="'.h(t('theme')).'">';
+    $presets=[
+        'ember'=>['Classic Grill','theme_desc_ember','🔥'],
+        'garden'=>['Summer Garden','theme_desc_garden','🌱'],
+        'midnight'=>['Dark Mode','theme_desc_midnight','🌙'],
+        'nordic'=>['Nordic Light','theme_desc_nordic','❄️'],
+        'smoke'=>['Smokehouse','theme_desc_smoke','♨️'],
+        'kids'=>['Kids Party','theme_desc_kids','🎈'],
+        'custom'=>[t('theme_custom'),'theme_desc_custom','🎨'],
+    ];
+    $currentTheme=active_theme();
+    foreach($presets as $id=>$values){
+        $active=$currentTheme===$id;
+        echo '<button type="button" class="theme-preview theme-preview--'.h($id).($active?' selected':'').'" data-theme-select="'.h($id).'" aria-pressed="'.($active?'true':'false').'">';
+        echo '<span class="theme-preview-scene" aria-hidden="true"><span class="theme-preview-top"><span class="preview-emblem">'.h($values[2]).'</span><span class="preview-titlebar"></span><span class="preview-dot"></span></span><span class="theme-preview-layout"><span class="preview-rail"></span><span class="preview-content"><span class="preview-tiles"><i></i><i></i><i></i></span><span class="preview-line"></span><span class="preview-line short"></span><span class="preview-action"></span></span></span></span>';
+        echo '<span class="theme-preview-info"><strong>'.h($values[0]).'</strong><span class="theme-active-chip">'.($active?h(t('theme_active')):'').'</span></span><span class="theme-preview-description">'.h(t($values[1])).'</span></button>';
+    }
+    echo '</div>';
+    echo '<section class="custom-theme-controls" id="custom-theme-controls" '.($currentTheme==='custom'?'':'hidden').'><h3>'.h(t('theme_customize')).'</h3><p class="muted">'.h(t('theme_custom_hint')).'</p><div class="custom-theme-fields"><label class="field"><span>'.h(t('theme_accent')).'</span><input type="color" id="theme-accent" value="'.h(preg_match('/^#[a-fA-F0-9]{6}$/D',setting('theme_custom_accent','#e97838'))?setting('theme_custom_accent','#e97838'):'#e97838').'"></label><label class="field"><span>'.h(t('theme_mode')).'</span><select id="theme-mode"><option value="dark" '.(setting('theme_custom_mode','dark')==='dark'?'selected':'').'>'.h(t('theme_dark')).'</option><option value="light" '.(setting('theme_custom_mode','dark')==='light'?'selected':'').'>'.h(t('theme_light')).'</option></select></label><label class="field"><span>'.h(t('theme_cards')).'</span><select id="theme-cards">';
+    foreach(['soft'=>t('theme_cards_soft'),'outlined'=>t('theme_cards_outlined'),'glass'=>t('theme_cards_glass')] as $key=>$name){echo '<option value="'.h($key).'" '.(setting('theme_custom_cards','soft')===$key?'selected':'').'>'.h($name).'</option>';}
+    echo '</select></label></div></section></div>';
+    echo '<div class="grid cols-2"><div class="card"><h2>'.h(t('appearance')).' · '.h(t('theme_branding')).'</h2><p class="muted">'.h(t('theme_branding_hint')).'</p><div class="branding-upload-grid">';
+    foreach(['logo','banner'] as $kind){
+        $url=theme_image_url($kind);
+        echo '<div class="branding-upload-item"><h3>'.h($kind==='logo'?t('theme_logo'):t('theme_banner')).'</h3><div class="branding-image-preview">';
+        echo '<img src="'.h($url?:($kind==='logo'?'assets/logo.svg':'assets/hero-grill.svg')).'" alt="" loading="lazy"></div>';
+        echo '<form method="post" enctype="multipart/form-data" action="'.h(route('theme_asset_upload')).'"><input type="hidden" name="csrf" value="'.h(csrf_token()).'"><input type="hidden" name="kind" value="'.h($kind).'"><input type="file" name="image" accept="image/png,image/jpeg,image/webp" required><button class="btn small" type="submit">'.h(t('theme_upload')).'</button></form>';
+        if($url){echo '<form method="post" action="'.h(route('theme_asset_upload')).'"><input type="hidden" name="csrf" value="'.h(csrf_token()).'"><input type="hidden" name="kind" value="'.h($kind).'"><input type="hidden" name="action" value="remove"><button class="btn small ghost" type="submit">'.h(t('theme_remove')).'</button></form>';}
+        echo '</div>';
+    }
+    echo '</div><p class="muted">'.h(t('theme_image_hint')).'</p></div>';
+    echo '<div class="card"><h2>'.h(t('settings')).'</h2><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="save"><div class="field"><label>' . h(t('default_language')) . '</label><select name="default_language">';
     foreach(available_langs() as $code=>$name){echo '<option value="' . h($code) . '" ' . (setting('default_language','de')===$code?'selected':'') . '>' . h($name) . '</option>';}
     echo '</select></div><h3>' . h(t('weather_widget')) . '</h3><p class="muted">' . h(t('weather_hint')) . '</p><div class="field"><label>' . h(t('weather_city')) . '</label><input id="weather-city" name="weather_city" value="' . h(setting('weather_city')) . '" placeholder="Munich"> <div class="place-search"><button type="button" class="btn ghost small" id="weather-city-search" data-url="' . h(route('weather_search_api')) . '">🔎 ' . h(t('search_city')) . '</button><div class="place-results" id="weather-place-results" aria-live="polite"></div></div></div><div class="form-row"><div class="field"><label>Latitude</label><input id="weather-lat" name="weather_lat" type="number" step="any" value="' . h(setting('weather_lat')) . '" placeholder="48.14"></div><div class="field"><label>Longitude</label><input id="weather-lon" name="weather_lon" type="number" step="any" value="' . h(setting('weather_lon')) . '" placeholder="11.58"></div></div><h3>' . h(t('footer_settings')) . '</h3><div class="field"><label>' . h(t('footer_text')) . '</label><textarea name="footer_text" rows="2" maxlength="400">' . h(setting('footer_text',t('footer'))) . '</textarea></div><label class="check-chip"><input type="checkbox" name="footer_show_version" ' . (setting('footer_show_version','0')==='1'?'checked':'') . '> ' . h(t('footer_show_version')) . '</label><p class="muted">' . h(t('footer_pages')) . '</p><div class="footer-page-options">';
     foreach(['home'=>t('home'),'guest'=>t('guests'),'admin'=>t('admin'),'kitchen'=>t('kitchen')] as $key=>$label){echo '<label class="check-chip"><input type="checkbox" name="footer_pages[]" value="' . h($key) . '" ' . (in_array($key,explode(',',setting('footer_pages','home,guest,admin,kitchen')),true)?'checked':'') . '> ' . h($label) . '</label>';}
@@ -1614,7 +1735,7 @@ function page_event(): void {
     echo '<section class="section guest-shell"><div class="event-title"><span class="eyebrow">' . h(t('guest_experience')) . '</span><h1>' . h($event['title']) . '</h1><p class="muted">' . h($event['event_date']??'') . ' · ' . h($event['description']) . '</p></div>';
     if($event['status']==='closed'){echo '<div class="notice warn">' . h(t('closed_hint')) . '</div>';}
     if (!$guest) {
-        echo '<div class="card join-card"><div class="join-art"><img src="assets/hero-grill.svg" alt=""></div><div class="join-content"><span class="eyebrow">01 / ' . h(t('welcome')) . '</span><h2>' . h(t('join_event')) . '</h2><p class="muted">' . h(t('join_hint')) . '</p><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="join"><div class="field"><label>' . h(t('guest_name')) . '</label><input name="name" required maxlength="80" autofocus autocomplete="name" placeholder="Michi"></div><div class="field"><label>' . h(t('guest_pin')) . '</label><input name="pin" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" type="password" autocomplete="off" placeholder="••••"><small class="muted">' . h(t('guest_pin_hint')) . '</small></div><button class="primary btn-wide" type="submit">' . h(t('continue')) . ' →</button></form></div></div>';
+        echo '<div class="card join-card"><div class="join-art"><img src="'.h(theme_banner_url()).'" alt=""></div><div class="join-content"><span class="eyebrow">01 / ' . h(t('welcome')) . '</span><h2>' . h(t('join_event')) . '</h2><p class="muted">' . h(t('join_hint')) . '</p><form method="post"><input type="hidden" name="csrf" value="' . h(csrf_token()) . '"><input type="hidden" name="action" value="join"><div class="field"><label>' . h(t('guest_name')) . '</label><input name="name" required maxlength="80" autofocus autocomplete="name" placeholder="Michi"></div><div class="field"><label>' . h(t('guest_pin')) . '</label><input name="pin" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" type="password" autocomplete="off" placeholder="••••"><small class="muted">' . h(t('guest_pin_hint')) . '</small></div><button class="primary btn-wide" type="submit">' . h(t('continue')) . ' →</button></form></div></div>';
     } else {
         echo '<div class="guest-greeting"><div><span class="eyebrow">' . h(t('welcome')) . '</span><h2>' . h($guest['name']) . ' 👋</h2></div><span class="pill public">' . h(t('joined')) . '</span></div>';
         echo '<div id="guest-order-status" data-poll-url="' . h(route('guest_status_api',['slug'=>$slug])) . '">';show_guest_status($event,$guest);echo '</div>';
@@ -1784,7 +1905,7 @@ function render_ticket(array $it):void {
 }
 
 $route = (string)($_GET['r'] ?? 'home');
-if (setup_required() && !in_array($route, ['setup'], true)) { redirect_to('setup'); }
+if (setup_required() && !in_array($route, ['setup','theme_image'], true)) { redirect_to('setup'); }
 try {
     match ($route) {
         'home' => page_home(),
@@ -1795,6 +1916,9 @@ try {
         'kitchen_action_api' => page_kitchen_action_api(),
         'weather_search_api' => page_weather_search_api(),
         'admin_settings' => page_admin_settings(),
+        'admin_theme_api' => page_admin_theme_api(),
+        'theme_image' => page_theme_image(),
+        'theme_asset_upload' => page_theme_asset_upload(),
         'admin_ingredients' => page_admin_ingredients(),
         'admin_inventory' => page_admin_inventory(),
         'admin_guests' => page_admin_guests(),
