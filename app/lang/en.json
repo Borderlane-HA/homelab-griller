@@ -298,5 +298,8 @@
   "theme_image_hint": "Logo up to 2 MB, banner up to 5 MB. Maximum 4,000 × 4,000 pixels.",
   "theme_image_invalid": "Invalid or oversized image.",
   "theme_image_uploaded": "Image uploaded.",
-  "theme_image_removed": "Image removed."
+  "theme_image_removed": "Image removed.",
+  "weather_show_details": "Details",
+  "weather_hide_details": "Close",
+  "weather_hours_label": "Hourly forecast"
 }

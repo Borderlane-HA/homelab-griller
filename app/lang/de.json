@@ -298,5 +298,8 @@
   "theme_image_hint": "Logo bis 2 MB, Banner bis 5 MB. Maximal 4.000 × 4.000 Pixel.",
   "theme_image_invalid": "Ungültige Bilddatei oder Datei zu groß.",
   "theme_image_uploaded": "Bild hochgeladen.",
-  "theme_image_removed": "Bild entfernt."
+  "theme_image_removed": "Bild entfernt.",
+  "weather_show_details": "Details",
+  "weather_hide_details": "Schließen",
+  "weather_hours_label": "Stündliche Vorhersage"
 }

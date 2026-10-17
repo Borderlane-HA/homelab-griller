@@ -554,7 +554,7 @@ function admin_header_shell():void {
 function render_header(string $title = ''): void {
     $langs = available_langs();
     $current = $_SESSION['lang'] ?? setting('default_language',(getenv('GRILLER_DEFAULT_LANGUAGE') ?: 'de'));
-    $assetVersion = is_file(__DIR__ . '/VERSION') ? trim((string)file_get_contents(__DIR__ . '/VERSION')) : '2.0.0-beta.6';
+    $assetVersion = is_file(__DIR__ . '/VERSION') ? trim((string)file_get_contents(__DIR__ . '/VERSION')) : '2.0.0-beta.7';
     $adminLayout=admin_layout_enabled();
     echo '<!doctype html><html lang="' . h($current) . '"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">';
     echo '<title>' . h($title ? $title . ' · ' . t('app_name') : t('app_name')) . '</title>';
@@ -587,12 +587,12 @@ function render_footer(): void {
         $txt=setting('footer_text',t('footer'));
         echo '<footer class="footer'.(admin_layout_enabled()?' admin-footer':'') .'"><div class="container">' . nl2br(h($txt));
         if(setting('footer_show_version','0')==='1'){
-            $version=is_file(__DIR__.'/VERSION')?trim((string)file_get_contents(__DIR__.'/VERSION')):'2.0.0-beta.6';
+            $version=is_file(__DIR__.'/VERSION')?trim((string)file_get_contents(__DIR__.'/VERSION')):'2.0.0-beta.7';
             echo ' <span class="footer-version">v' . h($version) . '</span>';
         }
         echo '</div></footer>';
     }
-    $assetVersion = is_file(__DIR__ . '/VERSION') ? trim((string)file_get_contents(__DIR__ . '/VERSION')) : '2.0.0-beta.6';
+    $assetVersion = is_file(__DIR__ . '/VERSION') ? trim((string)file_get_contents(__DIR__ . '/VERSION')) : '2.0.0-beta.7';
     echo '<script defer src="assets/app.js?v=' . h(rawurlencode($assetVersion)) . '"></script></body></html>';
 }
 function admin_tabs(): void { // The shared sidebar replaces the old button rows.
@@ -1620,18 +1620,33 @@ function page_weather_widget(): void {
     echo '<div class="weather-mini"><span class="weather-emoji">'.weather_icon((int)($current['weather_code']??3)).'</span><div><strong>'.h(setting('weather_city',t('weather_widget'))).'</strong><small>'.h(t('weather_widget')).' · '.h(t('weather_hourly_update')).'</small></div><strong class="weather-temp">'.h(round((float)($current['temperature_2m']??0))).'°</strong><small>'.h((int)round((float)($current['wind_speed_10m']??0))).' km/h · '.h($current['precipitation']??0).' mm'.($today?' · ☔ '.$today['rain'].'%':'').'</small></div>';
 }
 function page_event_weather(array $event): void {
-    if(empty($event['event_date']) || !($day=weather_day($event['event_date'])))return;
-    echo '<div class="card weather-event-card"><div class="section-title compact"><h3>'.h(t('weather_forecast')).' · '.h($event['event_date']).'</h3><span class="pill">'.h(setting('weather_city')).'</span></div>';
-    echo '<div class="forecast-kpis"><span class="forecast-hero">'.$day['icon'].' '.$day['min'].'–'.$day['max'].'°C</span><span>☔ '.h($day['rain']).'%</span><span>🌬 '.h($day['wind']).' km/h</span><span>☀ '.h($day['sun']).' h</span></div>';
-    $w=weather_data();$times=$w['hourly']['time']??[];
-    echo '<div class="forecast-hours">';
-    foreach($times as $i=>$dateTime){
-        if(substr((string)$dateTime,0,10)!==$event['event_date'])continue;
-        $hour=(int)substr((string)$dateTime,11,2);
-        if($hour<10||$hour>22||($hour%2)!==0)continue;
-        echo '<div class="forecast-hour"><strong>'.h(substr((string)$dateTime,11,5)).'</strong><span>'.weather_icon((int)($w['hourly']['weather_code'][$i]??3)).'</span><span>'.h(round((float)($w['hourly']['temperature_2m'][$i]??0))).'°</span><small>☔ '.h($w['hourly']['precipitation_probability'][$i]??0).'%</small><small>🌬 '.h(round((float)($w['hourly']['wind_speed_10m'][$i]??0))).'</small></div>';
+    if (empty($event['event_date']) || !($day = weather_day($event['event_date']))) return;
+    $date = (string)$event['event_date'];
+    $city = trim((string)setting('weather_city'));
+    // Native details/summary: no reload, no extra JavaScript and keyboard accessible.
+    // Kept closed by default so the order board remains the primary content.
+    echo '<details class="card weather-event-card weather-disclosure">';
+    echo '<summary class="weather-disclosure-summary">';
+    echo '<span class="weather-disclosure-title"><span class="weather-disclosure-icon" aria-hidden="true">'.h($day['icon']).'</span><span class="weather-disclosure-caption"><strong>'.h(t('weather_forecast')).'</strong><small>'.h($date).($city !== '' ? ' · '.h($city) : '').'</small></span></span>';
+    echo '<span class="weather-disclosure-temp">'.h($day['min']).'–'.h($day['max']).'°C</span>';
+    echo '<span class="weather-disclosure-metrics"><span>☔ <strong>'.h($day['rain']).'%</strong></span><span>🌬 <strong>'.h($day['wind']).' km/h</strong></span></span>';
+    echo '<span class="weather-disclosure-action"><span class="weather-action-closed">'.h(t('weather_show_details')).'</span><span class="weather-action-open">'.h(t('weather_hide_details')).'</span><span class="weather-chevron" aria-hidden="true">⌄</span></span>';
+    echo '</summary>';
+    echo '<div class="weather-disclosure-content"><div class="weather-detail-heading"><span>☀️ '.h(t('inventory_sun')).': <strong>'.h($day['sun']).' h</strong></span><span class="muted">'.h(t('weather_hours_label')).'</span></div>';
+    $w = weather_data();
+    $times = $w['hourly']['time'] ?? [];
+    $hourCount = 0;
+    echo '<div class="forecast-hours weather-hourly-details">';
+    foreach ($times as $i => $dateTime) {
+        if (substr((string)$dateTime, 0, 10) !== $date) continue;
+        $hour = (int)substr((string)$dateTime, 11, 2);
+        if ($hour < 10 || $hour > 22 || ($hour % 2) !== 0) continue;
+        ++$hourCount;
+        echo '<div class="forecast-hour"><strong>'.h(substr((string)$dateTime, 11, 5)).'</strong><span>'.weather_icon((int)($w['hourly']['weather_code'][$i] ?? 3)).'</span><span>'.h(round((float)($w['hourly']['temperature_2m'][$i] ?? 0))).'°</span><small>☔ '.h($w['hourly']['precipitation_probability'][$i] ?? 0).'%</small><small>🌬 '.h(round((float)($w['hourly']['wind_speed_10m'][$i] ?? 0))).' km/h</small></div>';
     }
-    echo '</div><small class="muted">Open-Meteo · '.h(t('weather_hourly_update')).'</small></div>';
+    echo '</div>';
+    if ($hourCount === 0) echo '<p class="muted">'.h(t('forecast_unavailable')).'</p>';
+    echo '<small class="muted weather-disclosure-source">Open-Meteo · '.h(t('weather_hourly_update')).'</small></div></details>';
 }
 function page_weather_search_api(): void {
     require_admin();

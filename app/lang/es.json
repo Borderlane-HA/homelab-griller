@@ -298,5 +298,8 @@
   "theme_image_hint": "Logo máximo 2 MB, banner máximo 5 MB. Resolución máxima 4000 × 4000.",
   "theme_image_invalid": "Imagen no válida o demasiado grande.",
   "theme_image_uploaded": "Imagen subida.",
-  "theme_image_removed": "Imagen eliminada."
+  "theme_image_removed": "Imagen eliminada.",
+  "weather_show_details": "Detalles",
+  "weather_hide_details": "Cerrar",
+  "weather_hours_label": "Pronóstico por horas"
 }

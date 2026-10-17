@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.0.0-beta.7
+
+- Replaced the oversized Kitchen Display weather forecast with a compact, collapsed-by-default weather strip.
+- Current event weather essentials (temperature range, rain probability, and wind speed) always remain visible.
+- Native accessible disclosure reveals hourly forecast, sun hours and Open-Meteo attribution on demand, without any page reload.
+- Added English, German and Spanish weather-detail labels with responsive dark/light theme styling.
+- Brought forward the corrected beta.6 theme smoke test (CSRF extraction and persisted-theme check).
+- No database schema change, no modifications to guest ordering or inventory behavior.
+
 ## 2.0.0-beta.6
 
 - Six fully coordinated themes: Classic Grill, Summer Garden, Dark Mode, Nordic Light, Smokehouse and Kids Party; original theme keys remain backward compatible.

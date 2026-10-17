@@ -125,7 +125,7 @@ Open `https://SERVER-IP:8443` or use the domain covered by your certificate. The
 
 ## Releases
 
-Release tags such as `v2.0.0-beta.6` publish the Docker image and attach **FULL ZIP** and **UPDATE ZIP** for source installations. Docker/Proxmox users should update by pulling the container, **not** by replacing files inside it.
+Release tags such as `v2.0.0-beta.7` publish the Docker image and attach **FULL ZIP** and **UPDATE ZIP** for source installations. Docker/Proxmox users should update by pulling the container, **not** by replacing files inside it.
 
 **Upgrading from v1 / early v2:** back up the existing `data` directory and read [UPGRADE-v1-to-v2.md](UPGRADE-v1-to-v2.md). Do not delete your database. Test on a copy first.
 
