@@ -5,7 +5,7 @@ on:
     branches:
       - main
     tags:
-      - "v*.*.*"
+      - "v*"
   workflow_dispatch:
 
 permissions:
@@ -13,10 +13,32 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
+  IMAGE_NAME: ghcr.io/borderlane-ha/homelab-griller
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: PHP syntax
+        run: php -l app/index.php
+      - name: JavaScript syntax
+        run: node --check app/assets/app.js
+      - name: Shell syntax
+        run: bash -n scripts/*.sh
+      - name: Check language JSON
+        run: python3 -c 'import json,glob; [json.load(open(p)) for p in glob.glob("app/lang/*.json")]'
+
+  smoke:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test first-run setup and private data protection
+        run: bash tests/smoke.sh
+
   build-and-push:
+    needs: [validate, smoke]
     runs-on: ubuntu-latest
 
     steps:
@@ -54,3 +76,20 @@ jobs:
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  release-zip:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build source archives
+        run: bash scripts/package-release.sh
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true
